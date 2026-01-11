@@ -52,7 +52,7 @@ development_status:
   epic-2: in-progress
   2-1-domain-registration-service-port-interfaces: review
   2-2-postgresql-repository-email-claim: review
-  2-3-console-email-sender-adapter: backlog
+  2-3-console-email-sender-adapter: review
   2-4-register-api-endpoint: backlog
   epic-2-retrospective: optional
 
