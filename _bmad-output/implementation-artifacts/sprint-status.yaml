@@ -53,7 +53,7 @@ development_status:
   2-1-domain-registration-service-port-interfaces: review
   2-2-postgresql-repository-email-claim: review
   2-3-console-email-sender-adapter: review
-  2-4-register-api-endpoint: backlog
+  2-4-register-api-endpoint: review
   epic-2-retrospective: optional
 
   # Epic 3: Account Activation Flow

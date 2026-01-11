@@ -4,8 +4,9 @@ API v1 routes.
 Defines REST endpoints for the Trust State Machine Registration API.
 """
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from src.api.dependencies import get_registration_service
 from src.api.models import (
     ActivateRequest,
     ActivateResponse,
@@ -13,6 +14,8 @@ from src.api.models import (
     RegisterRequest,
     RegisterResponse,
 )
+from src.domain.exceptions import EmailAlreadyClaimed
+from src.domain.registration import RegistrationService
 
 router = APIRouter(tags=["v1"])
 
@@ -29,7 +32,11 @@ router = APIRouter(tags=["v1"])
     description="Submit email and password to begin registration. "
     "A 4-digit verification code will be sent to the provided email.",
 )
-async def register(request: RegisterRequest) -> RegisterResponse:
+async def register(
+    request_data: RegisterRequest,
+    request: Request,
+    service: RegistrationService = Depends(get_registration_service),
+) -> RegisterResponse:
     """
     Register a new user and send verification code.
 
@@ -38,10 +45,14 @@ async def register(request: RegisterRequest) -> RegisterResponse:
 
     Returns verification code expiration time on success.
     """
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Registration not yet implemented",
-    )
+    try:
+        service.register(request_data.email, request_data.password)
+    except EmailAlreadyClaimed:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Registration failed",
+        ) from None
+    return RegisterResponse(message="Verification code sent", expires_in_seconds=60)
 
 
 @router.post(
