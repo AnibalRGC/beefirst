@@ -33,5 +33,17 @@ services:
       db:
         condition: service_healthy
 
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    environment:
+      DATABASE_URL: postgresql://beefirst:beefirst@db:5432/beefirst
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles:
+      - test
+
 volumes:
   postgres_data:

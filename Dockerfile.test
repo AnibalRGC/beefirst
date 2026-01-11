@@ -1,0 +1,27 @@
+# beefirst - Test Runner Dockerfile
+# Includes dev dependencies for running pytest via docker-compose
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy and install all dependencies (prod + dev)
+COPY requirements.txt requirements-dev.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-dev.txt
+
+# Copy application and test code
+COPY src/ ./src/
+COPY tests/ ./tests/
+COPY migrations/ ./migrations/
+COPY pyproject.toml ./
+
+# Set Python path for imports
+ENV PYTHONPATH=/app
+
+# Default command runs all tests with coverage
+CMD ["pytest", "--cov=src", "--cov-report=term-missing"]
