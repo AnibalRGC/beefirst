@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     )
 
     # Database configuration
-    database_url: str = "postgresql://beefirst:beefirst@localhost:5432/beefirst"
+    database_url: str = "postgresql://beefirst:beefirst@localhost:5433/beefirst"
     pool_min_size: int = 2  # Minimum connections in pool
     pool_max_size: int = 10  # Maximum connections in pool
 

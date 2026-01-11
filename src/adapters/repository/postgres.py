@@ -6,11 +6,20 @@ repository port using psycopg3 with raw SQL.
 """
 
 import logging
+import secrets
 from pathlib import Path
 
+import bcrypt
 from psycopg_pool import ConnectionPool
 
+from src.domain.ports import TrustState, VerifyResult
+
 logger = logging.getLogger(__name__)
+
+# Pre-computed bcrypt hash for timing oracle prevention.
+# Used when email doesn't exist to ensure constant-time password comparison.
+# Hash of "dummy_password_for_timing_safety" with cost factor 10.
+_DUMMY_BCRYPT_HASH = bcrypt.hashpw(b"dummy_password_for_timing_safety", bcrypt.gensalt(10)).decode()
 
 
 class PostgresRegistrationRepository:
@@ -55,6 +64,139 @@ class PostgresRegistrationRepository:
             cursor.execute(sql, (email, password_hash, code))
             conn.commit()
             return cursor.rowcount == 1
+
+    def verify_and_activate(self, email: str, code: str, password: str) -> VerifyResult:
+        """
+        Verify code and password, activate account if valid.
+
+        Uses SELECT FOR UPDATE to lock the row during verification,
+        preventing race conditions in concurrent activation attempts.
+
+        Security measures:
+        - Constant-time code comparison via secrets.compare_digest()
+        - Constant-time password verification via bcrypt.checkpw()
+        - Dummy hash comparison for non-existent emails (timing oracle prevention)
+        - Generic INVALID_CODE for both code and password failures
+
+        Args:
+            email: Normalized email address
+            code: 4-digit verification code
+            password: User's plaintext password
+
+        Returns:
+            VerifyResult indicating success or specific failure reason
+        """
+        # SQL to fetch and lock registration row
+        select_sql = """
+            SELECT password_hash, verification_code, state, attempt_count, created_at
+            FROM registrations
+            WHERE email = %s
+            FOR UPDATE
+        """
+
+        # SQL to activate account
+        activate_sql = """
+            UPDATE registrations
+            SET state = %s, activated_at = NOW()
+            WHERE email = %s AND state = %s
+        """
+
+        # SQL to increment attempt count
+        increment_sql = """
+            UPDATE registrations
+            SET attempt_count = attempt_count + 1
+            WHERE email = %s AND state = %s
+        """
+
+        # SQL to lock account (3 failures)
+        lock_sql = """
+            UPDATE registrations
+            SET state = %s, attempt_count = attempt_count + 1, password_hash = NULL
+            WHERE email = %s AND state = %s
+        """
+
+        with self._pool.connection() as conn, conn.cursor() as cursor:
+            # Fetch registration with row lock
+            cursor.execute(select_sql, (email,))
+            row = cursor.fetchone()
+
+            # Prepare values for constant-time comparison
+            # Use dummy values if registration not found to prevent timing oracle
+            if row is not None:
+                stored_hash = row[0]
+                stored_code = row[1]
+                state = row[2]
+                attempt_count = row[3]
+                # created_at = row[4]  # TTL checked in SQL below
+            else:
+                stored_hash = _DUMMY_BCRYPT_HASH
+                stored_code = "0000"
+                state = None
+                attempt_count = 0
+
+            # CRITICAL: Always run BOTH comparisons for constant-time behavior
+            # This prevents timing oracle attacks that could reveal information
+            code_valid = secrets.compare_digest(stored_code.encode(), code.encode())
+            password_valid = bcrypt.checkpw(password.encode(), stored_hash.encode())
+
+            # Now process results - check state-based returns after constant-time ops
+            if row is None:
+                conn.commit()
+                return VerifyResult.NOT_FOUND
+
+            # LOCKED state returns LOCKED (account was locked due to 3 failures)
+            if state == TrustState.LOCKED.value:
+                conn.commit()
+                return VerifyResult.LOCKED
+
+            # Any state other than CLAIMED (e.g., ACTIVE, EXPIRED) returns NOT_FOUND
+            if state != TrustState.CLAIMED.value:
+                conn.commit()
+                return VerifyResult.NOT_FOUND
+
+            # Check TTL (60-second window) using database time
+            ttl_sql = """
+                SELECT 1 FROM registrations
+                WHERE email = %s
+                  AND state = %s
+                  AND created_at > NOW() - INTERVAL '60 seconds'
+            """
+            cursor.execute(ttl_sql, (email, TrustState.CLAIMED.value))
+            if cursor.fetchone() is None:
+                conn.commit()
+                return VerifyResult.EXPIRED
+
+            # Check if already locked (3+ attempts)
+            if attempt_count >= 3:
+                conn.commit()
+                return VerifyResult.LOCKED
+
+            # Verify code and password
+            if not code_valid or not password_valid:
+                # Increment attempt count
+                new_attempt_count = attempt_count + 1
+
+                if new_attempt_count >= 3:
+                    # Lock account and purge password hash (Data Stewardship)
+                    cursor.execute(
+                        lock_sql,
+                        (TrustState.LOCKED.value, email, TrustState.CLAIMED.value),
+                    )
+                    conn.commit()
+                    return VerifyResult.LOCKED
+                else:
+                    # Just increment attempt count
+                    cursor.execute(increment_sql, (email, TrustState.CLAIMED.value))
+                    conn.commit()
+                    return VerifyResult.INVALID_CODE
+
+            # All checks passed - activate account
+            cursor.execute(
+                activate_sql,
+                (TrustState.ACTIVE.value, email, TrustState.CLAIMED.value),
+            )
+            conn.commit()
+            return VerifyResult.SUCCESS
 
 
 def run_migrations(pool: ConnectionPool) -> None:
