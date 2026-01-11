@@ -43,7 +43,7 @@ development_status:
   # Epic 1: Project Bootstrap & Infrastructure
   epic-1: in-progress
   1-1-project-structure-dependencies: review
-  1-2-docker-compose-database-setup: backlog
+  1-2-docker-compose-database-setup: review
   1-3-fastapi-app-openapi-docs: backlog
   1-4-readme-architecture-documentation: backlog
   epic-1-retrospective: optional
