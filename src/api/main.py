@@ -13,9 +13,18 @@ from fastapi import FastAPI
 from psycopg_pool import ConnectionPool
 
 from src.adapters.repository.postgres import run_migrations
+from src.api.v1 import router as v1_router
 from src.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
+
+# OpenAPI tags for documentation grouping
+tags_metadata = [
+    {
+        "name": "v1",
+        "description": "Trust State Machine Registration API v1 - Register and activate user accounts",
+    },
+]
 
 
 @asynccontextmanager
@@ -55,10 +64,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(
     title="beefirst",
-    description="Trust State Machine Registration API",
+    description="Trust State Machine Registration API - Demonstrates the Identity Claim Dilemma solution",
     version="0.1.0",
+    openapi_tags=tags_metadata,
     lifespan=lifespan,
 )
+
+# Include v1 API routes
+app.include_router(v1_router, prefix="/v1")
 
 
 @app.get("/health")
