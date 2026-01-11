@@ -3,6 +3,29 @@ Registration domain service - Trust State Machine implementation.
 
 This module contains the core business logic for user registration,
 implementing the Trust State Machine pattern for identity verification.
+
+Trust State Machine (Forward-Only Transitions)
+==============================================
+
+States:
+- CLAIMED: Initial state after email claim (email registered, pending verification)
+- ACTIVE: Terminal state after successful verification (account activated)
+- EXPIRED: Terminal state when 60-second TTL exceeded
+- LOCKED: Terminal state after 3 failed verification attempts
+
+Valid Transitions (forward-only, enforced by repository):
+    CLAIMED -> ACTIVE   (successful verification)
+    CLAIMED -> EXPIRED  (TTL exceeded during verification attempt)
+    CLAIMED -> LOCKED   (3 failed attempts)
+
+Invalid Transitions (never allowed):
+    ACTIVE -> any       (ACTIVE is terminal)
+    EXPIRED -> any      (EXPIRED is terminal)
+    LOCKED -> any       (LOCKED is terminal)
+    any -> CLAIMED      (no backward movement)
+
+Note: State transition enforcement happens at the repository level via
+SQL constraints and atomic operations (SELECT FOR UPDATE).
 """
 
 import secrets
@@ -11,7 +34,7 @@ from dataclasses import dataclass
 import bcrypt
 
 from .exceptions import EmailAlreadyClaimed
-from .ports import EmailSender, RegistrationRepository
+from .ports import EmailSender, RegistrationRepository, VerifyResult
 
 
 @dataclass
@@ -50,6 +73,28 @@ class RegistrationService:
 
         self.email_sender.send_verification_code(normalized_email, code)
         return normalized_email
+
+    def verify_and_activate(self, email: str, code: str, password: str) -> VerifyResult:
+        """
+        Verify code and password, activate account if valid.
+
+        Delegates all verification logic to the repository, which handles:
+        - Atomic row-level locking (SELECT FOR UPDATE)
+        - Code comparison (constant-time via secrets.compare_digest)
+        - Password verification (constant-time via bcrypt)
+        - TTL check (database time: NOW() - 60 seconds)
+        - Attempt counting and lockout
+
+        Args:
+            email: User's email (will be normalized)
+            code: 4-digit verification code
+            password: User's password
+
+        Returns:
+            VerifyResult indicating success or specific failure reason
+        """
+        normalized_email = self._normalize_email(email)
+        return self.repository.verify_and_activate(normalized_email, code, password)
 
     def _normalize_email(self, email: str) -> str:
         """

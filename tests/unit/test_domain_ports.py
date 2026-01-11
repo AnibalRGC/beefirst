@@ -17,7 +17,7 @@ from src.domain.exceptions import (
     RegistrationError,
     VerificationFailed,
 )
-from src.domain.ports import EmailSender, RegistrationRepository, VerifyResult
+from src.domain.ports import EmailSender, RegistrationRepository, TrustState, VerifyResult
 
 
 class TestVerifyResultEnum:
@@ -53,6 +53,55 @@ class TestVerifyResultEnum:
         assert VerifyResult.NOT_FOUND.value == "not_found"
 
 
+class TestTrustStateEnum:
+    """Tests for TrustState enum (Story 3.1 AC1)."""
+
+    def test_trust_state_is_enum(self) -> None:
+        """TrustState is an Enum class."""
+        assert issubclass(TrustState, Enum)
+
+    def test_trust_state_is_str_mixin(self) -> None:
+        """TrustState uses str mixin for JSON serialization."""
+        assert issubclass(TrustState, str)
+
+    def test_trust_state_has_claimed(self) -> None:
+        """TrustState has CLAIMED value."""
+        assert hasattr(TrustState, "CLAIMED")
+        assert TrustState.CLAIMED.value == "CLAIMED"
+
+    def test_trust_state_has_active(self) -> None:
+        """TrustState has ACTIVE value."""
+        assert hasattr(TrustState, "ACTIVE")
+        assert TrustState.ACTIVE.value == "ACTIVE"
+
+    def test_trust_state_has_expired(self) -> None:
+        """TrustState has EXPIRED value."""
+        assert hasattr(TrustState, "EXPIRED")
+        assert TrustState.EXPIRED.value == "EXPIRED"
+
+    def test_trust_state_has_locked(self) -> None:
+        """TrustState has LOCKED value."""
+        assert hasattr(TrustState, "LOCKED")
+        assert TrustState.LOCKED.value == "LOCKED"
+
+    def test_trust_state_json_serializable(self) -> None:
+        """TrustState values can be serialized to JSON as strings."""
+        import json
+
+        # str mixin allows direct JSON serialization
+        assert json.dumps(TrustState.CLAIMED) == '"CLAIMED"'
+        assert json.dumps(TrustState.ACTIVE) == '"ACTIVE"'
+        assert json.dumps(TrustState.EXPIRED) == '"EXPIRED"'
+        assert json.dumps(TrustState.LOCKED) == '"LOCKED"'
+
+    def test_trust_state_string_comparison(self) -> None:
+        """TrustState values can be compared as strings."""
+        assert TrustState.CLAIMED == "CLAIMED"
+        assert TrustState.ACTIVE == "ACTIVE"
+        assert TrustState.EXPIRED == "EXPIRED"
+        assert TrustState.LOCKED == "LOCKED"
+
+
 class TestRegistrationRepositoryProtocol:
     """Tests for RegistrationRepository protocol (AC6)."""
 
@@ -71,6 +120,40 @@ class TestRegistrationRepositoryProtocol:
         repo = MockRepo()
         result = repo.claim_email("test@example.com", "hash", "1234")
         assert result is True
+
+    def test_registration_repository_has_verify_and_activate_method(self) -> None:
+        """RegistrationRepository defines verify_and_activate method (Story 3.1 AC10)."""
+        assert hasattr(RegistrationRepository, "verify_and_activate")
+
+    def test_verify_and_activate_accepts_correct_parameters(self) -> None:
+        """verify_and_activate method signature accepts email, code, password."""
+
+        # Create a mock implementation to verify interface
+        class MockRepo:
+            def claim_email(self, email: str, password_hash: str, code: str) -> bool:
+                return True
+
+            def verify_and_activate(self, email: str, code: str, password: str) -> VerifyResult:
+                return VerifyResult.SUCCESS
+
+        repo = MockRepo()
+        result = repo.verify_and_activate("test@example.com", "1234", "password123")
+        assert result == VerifyResult.SUCCESS
+
+    def test_verify_and_activate_returns_verify_result(self) -> None:
+        """verify_and_activate returns VerifyResult enum values."""
+
+        class MockRepo:
+            def claim_email(self, email: str, password_hash: str, code: str) -> bool:
+                return True
+
+            def verify_and_activate(self, email: str, code: str, password: str) -> VerifyResult:
+                return VerifyResult.INVALID_CODE
+
+        repo = MockRepo()
+        result = repo.verify_and_activate("test@example.com", "wrong", "password")
+        assert isinstance(result, VerifyResult)
+        assert result == VerifyResult.INVALID_CODE
 
 
 class TestEmailSenderProtocol:

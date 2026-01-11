@@ -16,6 +16,7 @@ import bcrypt
 import pytest
 
 from src.domain.exceptions import EmailAlreadyClaimed
+from src.domain.ports import VerifyResult
 from src.domain.registration import RegistrationService
 
 
@@ -267,3 +268,92 @@ class TestEmailAlreadyClaimedException:
             service.register("  USER@EXAMPLE.COM  ", "password123")
 
         assert "user@example.com" in str(exc_info.value)
+
+
+class TestVerifyAndActivate:
+    """Tests for verify_and_activate method (Story 3.1 AC2)."""
+
+    def test_verify_and_activate_exists(self) -> None:
+        """verify_and_activate method exists on RegistrationService."""
+        repo = Mock()
+        sender = Mock()
+
+        service = RegistrationService(repository=repo, email_sender=sender)
+        assert hasattr(service, "verify_and_activate")
+
+    def test_verify_and_activate_normalizes_email(self) -> None:
+        """verify_and_activate normalizes email before passing to repository."""
+        repo = Mock()
+        repo.verify_and_activate.return_value = VerifyResult.SUCCESS
+        sender = Mock()
+
+        service = RegistrationService(repository=repo, email_sender=sender)
+        service.verify_and_activate("  USER@EXAMPLE.COM  ", "1234", "password123")
+
+        repo.verify_and_activate.assert_called_once_with("user@example.com", "1234", "password123")
+
+    def test_verify_and_activate_returns_repository_result(self) -> None:
+        """verify_and_activate returns result from repository directly."""
+        repo = Mock()
+        repo.verify_and_activate.return_value = VerifyResult.SUCCESS
+        sender = Mock()
+
+        service = RegistrationService(repository=repo, email_sender=sender)
+        result = service.verify_and_activate("user@example.com", "1234", "password123")
+
+        assert result == VerifyResult.SUCCESS
+
+    def test_verify_and_activate_returns_invalid_code(self) -> None:
+        """verify_and_activate returns INVALID_CODE from repository."""
+        repo = Mock()
+        repo.verify_and_activate.return_value = VerifyResult.INVALID_CODE
+        sender = Mock()
+
+        service = RegistrationService(repository=repo, email_sender=sender)
+        result = service.verify_and_activate("user@example.com", "wrong", "password")
+
+        assert result == VerifyResult.INVALID_CODE
+
+    def test_verify_and_activate_returns_expired(self) -> None:
+        """verify_and_activate returns EXPIRED from repository."""
+        repo = Mock()
+        repo.verify_and_activate.return_value = VerifyResult.EXPIRED
+        sender = Mock()
+
+        service = RegistrationService(repository=repo, email_sender=sender)
+        result = service.verify_and_activate("user@example.com", "1234", "password")
+
+        assert result == VerifyResult.EXPIRED
+
+    def test_verify_and_activate_returns_locked(self) -> None:
+        """verify_and_activate returns LOCKED from repository."""
+        repo = Mock()
+        repo.verify_and_activate.return_value = VerifyResult.LOCKED
+        sender = Mock()
+
+        service = RegistrationService(repository=repo, email_sender=sender)
+        result = service.verify_and_activate("user@example.com", "1234", "password")
+
+        assert result == VerifyResult.LOCKED
+
+    def test_verify_and_activate_returns_not_found(self) -> None:
+        """verify_and_activate returns NOT_FOUND from repository."""
+        repo = Mock()
+        repo.verify_and_activate.return_value = VerifyResult.NOT_FOUND
+        sender = Mock()
+
+        service = RegistrationService(repository=repo, email_sender=sender)
+        result = service.verify_and_activate("unknown@example.com", "1234", "password")
+
+        assert result == VerifyResult.NOT_FOUND
+
+    def test_verify_and_activate_delegates_to_repository(self) -> None:
+        """verify_and_activate delegates verification to repository."""
+        repo = Mock()
+        repo.verify_and_activate.return_value = VerifyResult.SUCCESS
+        sender = Mock()
+
+        service = RegistrationService(repository=repo, email_sender=sender)
+        service.verify_and_activate("user@example.com", "1234", "password123")
+
+        repo.verify_and_activate.assert_called_once()

@@ -49,16 +49,16 @@ development_status:
   epic-1-retrospective: optional
 
   # Epic 2: User Registration Flow
-  epic-2: in-progress
-  2-1-domain-registration-service-port-interfaces: review
-  2-2-postgresql-repository-email-claim: review
-  2-3-console-email-sender-adapter: review
-  2-4-register-api-endpoint: review
+  epic-2: done
+  2-1-domain-registration-service-port-interfaces: done
+  2-2-postgresql-repository-email-claim: done
+  2-3-console-email-sender-adapter: done
+  2-4-register-api-endpoint: done
   epic-2-retrospective: optional
 
   # Epic 3: Account Activation Flow
-  epic-3: backlog
-  3-1-domain-state-machine-verification-logic: backlog
+  epic-3: in-progress
+  3-1-domain-state-machine-verification-logic: review
   3-2-postgresql-repository-verify-activate: backlog
   3-3-activate-api-endpoint-basic-auth: backlog
   3-4-timing-safe-error-responses: backlog

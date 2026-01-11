@@ -7,7 +7,7 @@ abstraction, ensuring true hexagonal architecture decoupling.
 """
 
 from .exceptions import EmailAlreadyClaimed, RegistrationError, VerificationFailed
-from .ports import EmailSender, RegistrationRepository, VerifyResult
+from .ports import EmailSender, RegistrationRepository, TrustState, VerifyResult
 from .registration import RegistrationService
 
 __all__ = [
@@ -16,6 +16,7 @@ __all__ = [
     "RegistrationError",
     "RegistrationRepository",
     "RegistrationService",
+    "TrustState",
     "VerificationFailed",
     "VerifyResult",
 ]
