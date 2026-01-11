@@ -495,12 +495,15 @@ async def handle_verification_failed(request, exc):
 5. **Explicit SQL** - No query builders, no ORM patterns, no f-strings for queries
 6. **Type hints on all public functions** - Enables IDE support and documentation
 7. **Parameterized queries only** - `cursor.execute(sql, (param,))` never f-strings
+8. **Pass ruff format and check** - All code must pass `ruff format` and `ruff check` before commit
 
 **Pattern Verification:**
 
 | Check | Method |
 |-------|--------|
 | Domain purity | `grep -r "from src.adapters" src/domain/` should return nothing |
+| Code formatting | `ruff format --check src/ tests/` must pass |
+| Code linting | `ruff check src/ tests/` must pass |
 | Type coverage | `mypy src/` with strict mode |
 | Test categories | `pytest tests/adversarial/` runs attack scenarios |
 | Coverage target | `pytest --cov=src --cov-fail-under=90` |
@@ -734,8 +737,8 @@ POST /v1/register
 | File | Purpose |
 |------|---------|
 | `requirements.txt` | Production: fastapi, uvicorn, psycopg[binary], bcrypt, pydantic-settings |
-| `requirements-dev.txt` | Dev: pytest, pytest-cov, httpx, mypy |
-| `pyproject.toml` | Tool config: pytest paths, mypy settings, coverage thresholds |
+| `requirements-dev.txt` | Dev: pytest, pytest-cov, httpx, mypy, ruff |
+| `pyproject.toml` | Tool config: pytest paths, mypy settings, ruff rules, coverage thresholds |
 | `.env.example` | Template: DATABASE_URL, TTL_SECONDS, BCRYPT_COST |
 | `docker-compose.yml` | Services: api (build context), db (postgres:16) |
 | `Dockerfile` | Multi-stage: builder → production image |
@@ -766,6 +769,10 @@ docker-compose up -d db
 
 # Run API with hot reload
 uvicorn src.api.main:app --reload
+
+# Format and lint (MANDATORY before commit)
+ruff format src/ tests/
+ruff check src/ tests/ --fix
 
 # Run tests with coverage
 pytest --cov=src --cov-fail-under=90
@@ -922,7 +929,7 @@ mkdir -p migrations
 
 # 2. Initialize dependencies
 pip install fastapi uvicorn "psycopg[binary]" bcrypt pydantic-settings
-pip install pytest pytest-cov httpx mypy  # dev dependencies
+pip install pytest pytest-cov httpx mypy ruff  # dev dependencies
 ```
 
 **Development Sequence:**
