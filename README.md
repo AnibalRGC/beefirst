@@ -322,6 +322,56 @@ docker-compose --profile test run --rm test pytest -m adversarial
 
 ---
 
+## Quick Verification for Testers
+
+Complete end-to-end verification using only Docker:
+
+```bash
+# 1. Start the application
+docker-compose up -d
+
+# 2. Wait for startup and verify health
+sleep 10
+curl http://localhost:8000/health
+# Expected: {"status":"healthy"}
+
+# 3. Register a new user
+curl -X POST http://localhost:8000/v1/register \
+  -H "Content-Type: application/json" \
+  -d '{"email": "tester@example.com", "password": "secure123"}'
+# Expected: {"message":"Verification code sent","email":"tester@example.com","expires_in_seconds":60}
+
+# 4. Get the verification code from logs
+docker-compose logs api | grep VERIFICATION
+# Expected: [VERIFICATION] Email: tester@example.com Code: XXXX
+
+# 5. Activate the account (replace XXXX with actual code, within 60 seconds!)
+curl -X POST http://localhost:8000/v1/activate \
+  -u "tester@example.com:secure123" \
+  -H "Content-Type: application/json" \
+  -d '{"code": "XXXX"}'
+# Expected: {"message":"Account activated","email":"tester@example.com"}
+
+# 6. Run the full test suite
+docker-compose --profile test run --rm test
+# Expected: 211 passed, 100% coverage
+
+# 7. Cleanup
+docker-compose down
+```
+
+### What to Verify
+
+| Check | Expected Result |
+|-------|-----------------|
+| Health endpoint | `{"status":"healthy"}` |
+| Registration | 201 Created with expiration time |
+| Code in logs | 4-digit code visible |
+| Activation | 200 OK with email confirmation |
+| Test suite | 211 passed, 100% coverage |
+
+---
+
 ## Project Structure
 
 ```

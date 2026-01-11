@@ -7,6 +7,12 @@ configures middleware, exception handlers, and lifespan events.
 
 import logging
 from collections.abc import AsyncGenerator
+
+# Configure logging to show all INFO level logs including from adapters
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s:     %(name)s - %(message)s",
+)
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
