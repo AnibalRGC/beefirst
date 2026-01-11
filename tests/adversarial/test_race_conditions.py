@@ -17,6 +17,7 @@ References:
 - [Source: prd.md#FR18 (Prevent race conditions)]
 """
 
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import bcrypt
@@ -24,39 +25,12 @@ import pytest
 from psycopg_pool import ConnectionPool
 
 from src.adapters.repository.postgres import PostgresRegistrationRepository
-from src.config.settings import get_settings
+from src.domain.ports import VerifyResult
+
+# Apply adversarial marker to all tests in this module
+pytestmark = pytest.mark.adversarial
 
 
-@pytest.fixture(scope="module")
-def pool() -> ConnectionPool:
-    """Create connection pool for adversarial tests."""
-    settings = get_settings()
-    pool = ConnectionPool(
-        conninfo=settings.database_url,
-        min_size=1,
-        max_size=10,
-        open=True,
-    )
-    yield pool
-    pool.close()
-
-
-@pytest.fixture
-def repository(pool: ConnectionPool) -> PostgresRegistrationRepository:
-    """Create repository instance for each test."""
-    return PostgresRegistrationRepository(pool)
-
-
-@pytest.fixture(autouse=True)
-def clean_database(pool: ConnectionPool) -> None:
-    """Clean registrations table before each test."""
-    with pool.connection() as conn:
-        conn.execute("DELETE FROM registrations")
-        conn.commit()
-    yield
-
-
-@pytest.mark.adversarial
 class TestRaceConditionAttacks:
     """
     Adversarial tests simulating race condition attacks.
@@ -79,12 +53,14 @@ class TestRaceConditionAttacks:
         """
         email = "attack@example.com"
         results: list[bool] = []
+        results_lock = threading.Lock()
         num_attackers = 5  # Simulate 5 concurrent attack requests
 
         def attack_register() -> None:
             repo = PostgresRegistrationRepository(pool)
             result = repo.claim_email(email, "$2b$10$attackhash", "1234")
-            results.append(result)
+            with results_lock:
+                results.append(result)
 
         # Launch concurrent attack
         with ThreadPoolExecutor(max_workers=num_attackers) as executor:
@@ -120,12 +96,14 @@ class TestRaceConditionAttacks:
         """
         email = "ddos@example.com"
         results: list[bool] = []
+        results_lock = threading.Lock()
         num_attackers = 20  # Higher concurrency attack
 
         def attack_register() -> None:
             repo = PostgresRegistrationRepository(pool)
             result = repo.claim_email(email, "$2b$10$attackhash", "1234")
-            results.append(result)
+            with results_lock:
+                results.append(result)
 
         # Launch high-volume attack
         with ThreadPoolExecutor(max_workers=num_attackers) as executor:
@@ -160,12 +138,14 @@ class TestRaceConditionAttacks:
             conn.commit()
 
         results: list[bool] = []
+        results_lock = threading.Lock()
         num_attackers = 5
 
         def attack_reregister(attacker_id: int) -> None:
             repo = PostgresRegistrationRepository(pool)
             result = repo.claim_email(email, f"$2b$10$attacker{attacker_id}hash", "9999")
-            results.append(result)
+            with results_lock:
+                results.append(result)
 
         # Launch concurrent re-registration attack
         with ThreadPoolExecutor(max_workers=num_attackers) as executor:
@@ -219,15 +199,15 @@ class TestRaceConditionAttacks:
             )
             conn.commit()
 
-        from src.domain.ports import VerifyResult
-
         results: list[VerifyResult] = []
+        results_lock = threading.Lock()
         num_attackers = 5
 
         def attack_activate() -> None:
             repo = PostgresRegistrationRepository(pool)
             result = repo.verify_and_activate(email, code, password)
-            results.append(result)
+            with results_lock:
+                results.append(result)
 
         # Launch concurrent activation attack
         with ThreadPoolExecutor(max_workers=num_attackers) as executor:
@@ -260,7 +240,6 @@ class TestRaceConditionAttacks:
         assert row[1] is not None, "activated_at should be set"
 
 
-@pytest.mark.adversarial
 class TestDataIntegrityUnderConcurrency:
     """
     Verify data integrity is maintained under adversarial concurrent access.
@@ -283,13 +262,15 @@ class TestDataIntegrityUnderConcurrency:
         expected_code = "5555"
 
         results: list[tuple[bool, str, str]] = []
+        results_lock = threading.Lock()
 
         def attack_register(attacker_id: int) -> None:
             repo = PostgresRegistrationRepository(pool)
             hash_val = expected_hash if attacker_id == 0 else f"$2b$10$loser{attacker_id}"
             code_val = expected_code if attacker_id == 0 else f"{attacker_id:04d}"
             result = repo.claim_email(email, hash_val, code_val)
-            results.append((result, hash_val, code_val))
+            with results_lock:
+                results.append((result, hash_val, code_val))
 
         # Launch concurrent attack with different credentials
         with ThreadPoolExecutor(max_workers=5) as executor:

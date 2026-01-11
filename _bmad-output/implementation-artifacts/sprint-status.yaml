@@ -73,9 +73,9 @@ development_status:
   epic-4-retrospective: optional
 
   # Epic 5: Test Suite & Quality Assurance
-  epic-5: in-progress
-  5-1-unit-tests-domain-logic: review
-  5-2-integration-tests-repository: review
-  5-3-adversarial-tests-security-invariants: review
-  5-4-coverage-reporting-ci-configuration: review
+  epic-5: done
+  5-1-unit-tests-domain-logic: done
+  5-2-integration-tests-repository: done
+  5-3-adversarial-tests-security-invariants: done
+  5-4-coverage-reporting-ci-configuration: done
   epic-5-retrospective: optional

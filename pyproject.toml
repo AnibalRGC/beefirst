@@ -27,7 +27,11 @@ exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",
     "raise NotImplementedError",
-    "\\.\\.\\.",  # Ellipsis in Protocol abstract method stubs
+    # Ellipsis (...) in Protocol abstract method stubs - matches lines containing
+    # only "..." which are used as placeholder bodies in Protocol definitions.
+    # Note: This pattern is intentionally broad; use "pragma: no cover" for
+    # specific exclusions if ellipsis appears in non-Protocol contexts.
+    "^\\s*\\.\\.\\.\\s*$",
 ]
 
 [tool.mypy]
