@@ -491,6 +491,175 @@ class TestVerifyAndActivateAttemptCounting:
         assert row is not None
         assert row[0] is None  # password_hash should be purged
 
+    def test_attempt_count_progression_0_to_3(
+        self, repository: PostgresRegistrationRepository, pool: ConnectionPool
+    ) -> None:
+        """Attempt count progresses 0→1→2→3 with each failure (FR19).
+
+        AC5: Verify each intermediate state is verifiable in the database.
+        """
+        email = "progression@example.com"
+        password = "password123"
+        code = "1234"
+        password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(10)).decode()
+
+        with pool.connection() as conn:
+            conn.execute(
+                "INSERT INTO registrations (email, password_hash, verification_code) VALUES (%s, %s, %s)",
+                (email, password_hash, code),
+            )
+            conn.commit()
+
+        # Verify initial state: attempt_count=0
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT attempt_count, state FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+        assert row[0] == 0, "Initial attempt_count should be 0"
+        assert row[1] == "CLAIMED", "Initial state should be CLAIMED"
+
+        # Attempt 1: wrong code
+        result1 = repository.verify_and_activate(email, "0000", password)
+        assert result1 == VerifyResult.INVALID_CODE
+
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT attempt_count, state FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+        assert row[0] == 1, "After 1st failure, attempt_count should be 1"
+        assert row[1] == "CLAIMED", "After 1st failure, state should still be CLAIMED"
+
+        # Attempt 2: wrong code
+        result2 = repository.verify_and_activate(email, "0000", password)
+        assert result2 == VerifyResult.INVALID_CODE
+
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT attempt_count, state FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+        assert row[0] == 2, "After 2nd failure, attempt_count should be 2"
+        assert row[1] == "CLAIMED", "After 2nd failure, state should still be CLAIMED"
+
+        # Attempt 3: triggers lockout
+        result3 = repository.verify_and_activate(email, "0000", password)
+        assert result3 == VerifyResult.LOCKED
+
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT attempt_count, state FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+        assert row[0] == 3, "After 3rd failure, attempt_count should be 3"
+        assert row[1] == "LOCKED", "After 3rd failure, state should be LOCKED"
+
+    def test_wrong_password_increments_attempt_count(
+        self, repository: PostgresRegistrationRepository, pool: ConnectionPool
+    ) -> None:
+        """Wrong password (with correct code) also increments attempt_count (FR19).
+
+        AC1: Both wrong code AND wrong password increment the counter.
+        """
+        email = "wrongpwd@example.com"
+        password = "password123"
+        code = "1234"
+        wrong_password = "wrongpassword"
+        password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(10)).decode()
+
+        with pool.connection() as conn:
+            conn.execute(
+                "INSERT INTO registrations (email, password_hash, verification_code) VALUES (%s, %s, %s)",
+                (email, password_hash, code),
+            )
+            conn.commit()
+
+        # Attempt with correct code but wrong password
+        result = repository.verify_and_activate(email, code, wrong_password)
+        assert result == VerifyResult.INVALID_CODE  # Same result for both failures
+
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT attempt_count FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+        assert row[0] == 1, "Wrong password should increment attempt_count"
+
+    def test_mixed_failures_contribute_to_lockout(
+        self, repository: PostgresRegistrationRepository, pool: ConnectionPool
+    ) -> None:
+        """Both wrong code and wrong password failures contribute to lockout.
+
+        AC1: Verifies mixed failure types all count toward the 3-attempt lockout.
+        """
+        email = "mixedfailures@example.com"
+        password = "password123"
+        code = "1234"
+        password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(10)).decode()
+
+        with pool.connection() as conn:
+            conn.execute(
+                "INSERT INTO registrations (email, password_hash, verification_code) VALUES (%s, %s, %s)",
+                (email, password_hash, code),
+            )
+            conn.commit()
+
+        # Failure 1: wrong code
+        repository.verify_and_activate(email, "0000", password)
+        # Failure 2: wrong password (correct code)
+        repository.verify_and_activate(email, code, "wrongpassword")
+        # Failure 3: wrong code again - should trigger lockout
+        result = repository.verify_and_activate(email, "0000", password)
+
+        assert result == VerifyResult.LOCKED
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT state, attempt_count FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+        assert row[0] == "LOCKED"
+        assert row[1] == 3
+
+    def test_locked_account_fails_with_correct_credentials(
+        self, repository: PostgresRegistrationRepository, pool: ConnectionPool
+    ) -> None:
+        """Locked account returns LOCKED even with correct code AND password.
+
+        AC4: The locked state persists permanently.
+        This is different from test_locked_account_returns_locked which uses
+        a pre-locked account - this one locks through actual failures.
+        """
+        email = "lockedcorrect@example.com"
+        password = "password123"
+        code = "1234"
+        password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(10)).decode()
+
+        with pool.connection() as conn:
+            conn.execute(
+                "INSERT INTO registrations (email, password_hash, verification_code) VALUES (%s, %s, %s)",
+                (email, password_hash, code),
+            )
+            conn.commit()
+
+        # Lock the account through 3 failures
+        repository.verify_and_activate(email, "0000", password)
+        repository.verify_and_activate(email, "0000", password)
+        lock_result = repository.verify_and_activate(email, "0000", password)
+        assert lock_result == VerifyResult.LOCKED
+
+        # Now try with CORRECT code and password
+        correct_result = repository.verify_and_activate(email, code, password)
+        assert correct_result == VerifyResult.LOCKED, (
+            "Locked state should persist even with correct credentials"
+        )
+
 
 class TestVerifyAndActivateNotFound:
     """Tests for not found scenarios."""
