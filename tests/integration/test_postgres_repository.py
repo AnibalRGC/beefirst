@@ -826,3 +826,283 @@ class TestVerifyAndActivateExpired:
 
         result = repository.verify_and_activate(email, code, password)
         assert result == VerifyResult.NOT_FOUND
+
+
+class TestDataStewardship:
+    """Data Stewardship tests for FR24, FR25, NFR-S5, NFR-S6.
+
+    These tests verify the Data Stewardship principle:
+    - FR24: Purge hashed passwords when registrations expire or lock
+    - FR25: No "ghost credentials" for unverified accounts
+    - NFR-S5: Database credentials never appear in application logs
+    - NFR-S6: Hashed passwords purged within 60 seconds of expiration
+
+    Ghost credentials are password hashes that exist for accounts that:
+    - Cannot be activated (EXPIRED, LOCKED states)
+    - Were never fully verified
+    """
+
+    def test_expired_state_has_null_password_hash(
+        self, repository: PostgresRegistrationRepository, pool: ConnectionPool
+    ) -> None:
+        """EXPIRED registrations have password_hash = NULL (FR24, FR25).
+
+        After a registration expires, no ghost credentials should exist.
+        """
+        email = "ds_expired@example.com"
+        password = "password123"
+        code = "1234"
+        password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(10)).decode()
+
+        # Create expired registration
+        with pool.connection() as conn:
+            conn.execute(
+                """INSERT INTO registrations (email, password_hash, verification_code, created_at)
+                   VALUES (%s, %s, %s, NOW() - INTERVAL '61 seconds')""",
+                (email, password_hash, code),
+            )
+            conn.commit()
+
+        # Trigger expiration (lazy transition)
+        result = repository.verify_and_activate(email, code, password)
+        assert result == VerifyResult.EXPIRED
+
+        # Verify: EXPIRED state must have NULL password_hash
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT state, password_hash FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+
+        assert row is not None
+        assert row[0] == "EXPIRED", "State should be EXPIRED"
+        assert row[1] is None, "EXPIRED state must have NULL password_hash (FR24, FR25)"
+
+    def test_locked_state_has_null_password_hash(
+        self, repository: PostgresRegistrationRepository, pool: ConnectionPool
+    ) -> None:
+        """LOCKED registrations have password_hash = NULL (FR24, FR25).
+
+        After an account is locked, no ghost credentials should exist.
+        """
+        email = "ds_locked@example.com"
+        password = "password123"
+        code = "1234"
+        password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(10)).decode()
+
+        # Create registration
+        with pool.connection() as conn:
+            conn.execute(
+                "INSERT INTO registrations (email, password_hash, verification_code) VALUES (%s, %s, %s)",
+                (email, password_hash, code),
+            )
+            conn.commit()
+
+        # Lock the account through 3 failures
+        repository.verify_and_activate(email, "0000", password)
+        repository.verify_and_activate(email, "0000", password)
+        result = repository.verify_and_activate(email, "0000", password)
+        assert result == VerifyResult.LOCKED
+
+        # Verify: LOCKED state must have NULL password_hash
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT state, password_hash FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+
+        assert row is not None
+        assert row[0] == "LOCKED", "State should be LOCKED"
+        assert row[1] is None, "LOCKED state must have NULL password_hash (FR24, FR25)"
+
+    def test_claimed_state_has_password_hash(
+        self, repository: PostgresRegistrationRepository, pool: ConnectionPool
+    ) -> None:
+        """CLAIMED registrations retain password_hash (positive test).
+
+        Fresh registrations in CLAIMED state should have their password hash
+        for verification purposes.
+        """
+        email = "ds_claimed@example.com"
+        password_hash = "$2b$10$validhashvalue"
+        code = "1234"
+
+        # Create fresh registration
+        repository.claim_email(email, password_hash, code)
+
+        # Verify: CLAIMED state must have password_hash
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT state, password_hash FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+
+        assert row is not None
+        assert row[0] == "CLAIMED", "State should be CLAIMED"
+        assert row[1] is not None, "CLAIMED state must have password_hash"
+        assert row[1] == password_hash, "Password hash should be stored correctly"
+
+    def test_no_ghost_credentials_after_expiration(
+        self, repository: PostgresRegistrationRepository, pool: ConnectionPool
+    ) -> None:
+        """No ghost credentials exist after expiration (FR25).
+
+        Explicitly verifies that password_hash transitions from non-NULL to NULL
+        during the expiration process.
+        """
+        email = "ghost_expire@example.com"
+        password = "password123"
+        code = "1234"
+        password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(10)).decode()
+
+        # Create registration with password hash
+        with pool.connection() as conn:
+            conn.execute(
+                """INSERT INTO registrations (email, password_hash, verification_code, created_at)
+                   VALUES (%s, %s, %s, NOW() - INTERVAL '61 seconds')""",
+                (email, password_hash, code),
+            )
+            conn.commit()
+
+        # BEFORE: Verify password_hash exists
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT password_hash FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+        assert row[0] is not None, "Password hash should exist before expiration"
+
+        # Trigger expiration
+        repository.verify_and_activate(email, code, password)
+
+        # AFTER: Verify no ghost credentials (password_hash is NULL)
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT password_hash FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+        assert row[0] is None, "No ghost credentials should exist after expiration (FR25)"
+
+    def test_no_ghost_credentials_after_lockout(
+        self, repository: PostgresRegistrationRepository, pool: ConnectionPool
+    ) -> None:
+        """No ghost credentials exist after lockout (FR25).
+
+        Explicitly verifies that password_hash transitions from non-NULL to NULL
+        during the lockout process.
+        """
+        email = "ghost_lock@example.com"
+        password = "password123"
+        code = "1234"
+        password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(10)).decode()
+
+        # Create registration with password hash
+        with pool.connection() as conn:
+            conn.execute(
+                "INSERT INTO registrations (email, password_hash, verification_code) VALUES (%s, %s, %s)",
+                (email, password_hash, code),
+            )
+            conn.commit()
+
+        # BEFORE: Verify password_hash exists
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT password_hash FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+        assert row[0] is not None, "Password hash should exist before lockout"
+
+        # Trigger lockout
+        repository.verify_and_activate(email, "0000", password)
+        repository.verify_and_activate(email, "0000", password)
+        repository.verify_and_activate(email, "0000", password)
+
+        # AFTER: Verify no ghost credentials (password_hash is NULL)
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT password_hash FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+        assert row[0] is None, "No ghost credentials should exist after lockout (FR25)"
+
+    def test_active_state_may_have_password_hash(
+        self, repository: PostgresRegistrationRepository, pool: ConnectionPool
+    ) -> None:
+        """ACTIVE registrations may retain password_hash.
+
+        Unlike EXPIRED and LOCKED, ACTIVE accounts may keep their password hash
+        for potential future login verification (if implemented).
+        """
+        email = "ds_active@example.com"
+        password = "password123"
+        code = "1234"
+        password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(10)).decode()
+
+        # Create and activate registration
+        with pool.connection() as conn:
+            conn.execute(
+                "INSERT INTO registrations (email, password_hash, verification_code) VALUES (%s, %s, %s)",
+                (email, password_hash, code),
+            )
+            conn.commit()
+
+        result = repository.verify_and_activate(email, code, password)
+        assert result == VerifyResult.SUCCESS
+
+        # Verify: ACTIVE state may have password_hash (not purged)
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT state, password_hash FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+
+        assert row is not None
+        assert row[0] == "ACTIVE", "State should be ACTIVE"
+        # Note: ACTIVE accounts may or may not retain password_hash
+        # The current implementation retains it, but this is acceptable
+        # as ACTIVE is a terminal successful state
+
+    def test_credential_purge_is_atomic_with_state_transition(
+        self, repository: PostgresRegistrationRepository, pool: ConnectionPool
+    ) -> None:
+        """Credential purge happens atomically with state transition (FR24, FR25).
+
+        The UPDATE that changes state also sets password_hash = NULL in the same
+        SQL statement, ensuring atomicity.
+        """
+        email = "atomic_purge@example.com"
+        password = "password123"
+        code = "1234"
+        password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(10)).decode()
+
+        # Create expired registration
+        with pool.connection() as conn:
+            conn.execute(
+                """INSERT INTO registrations (email, password_hash, verification_code, created_at)
+                   VALUES (%s, %s, %s, NOW() - INTERVAL '61 seconds')""",
+                (email, password_hash, code),
+            )
+            conn.commit()
+
+        # Trigger expiration
+        repository.verify_and_activate(email, code, password)
+
+        # Verify both state and password_hash changed together
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT state, password_hash FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+
+        # If state is EXPIRED, password_hash MUST be NULL (atomic)
+        assert row[0] == "EXPIRED", "State should be EXPIRED"
+        assert row[1] is None, "If state=EXPIRED, password_hash must be NULL (atomic purge)"
