@@ -6,10 +6,10 @@ configures middleware, exception handlers, and lifespan events.
 """
 
 import logging
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from psycopg_pool import ConnectionPool
 
 from src.adapters.repository.postgres import run_migrations
@@ -40,10 +40,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
 
     logger.info("Starting application...")
-    logger.info(f"Connecting to database: {settings.database_url.split('@')[-1]}")
+    logger.info("Connecting to database...")
 
-    # Create connection pool
-    pool = ConnectionPool(conninfo=settings.database_url)
+    # Create connection pool with explicit sizing
+    pool = ConnectionPool(
+        conninfo=settings.database_url,
+        min_size=settings.pool_min_size,
+        max_size=settings.pool_max_size,
+    )
 
     # Run migrations
     logger.info("Running database migrations...")
@@ -75,6 +79,16 @@ app.include_router(v1_router, prefix="/v1")
 
 
 @app.get("/health")
-async def health_check() -> dict[str, str]:
-    """Health check endpoint."""
+async def health_check(request: Request) -> dict[str, str]:
+    """
+    Health check endpoint with database validation.
+
+    Returns 200 OK if application and database are healthy.
+    Raises exception if database connection fails.
+    """
+    # Validate database connectivity
+    pool = request.app.state.pool
+    with pool.connection() as conn:
+        conn.execute("SELECT 1")
+
     return {"status": "healthy"}

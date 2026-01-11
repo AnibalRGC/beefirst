@@ -8,5 +8,3 @@ This module provides pytest fixtures for:
 
 Implementation in Story 5.1.
 """
-
-import pytest

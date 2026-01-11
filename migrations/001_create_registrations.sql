@@ -4,6 +4,8 @@
 -- This table implements the Trust State Machine for user registration.
 -- See: architecture/core-architectural-decisions.md#Data Architecture
 
+BEGIN;
+
 CREATE TABLE IF NOT EXISTS registrations (
     -- Primary key: UUID auto-generated
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -37,3 +39,5 @@ CREATE TABLE IF NOT EXISTS registrations (
 -- Additional index for state-based queries if needed in future
 CREATE INDEX IF NOT EXISTS idx_registrations_state ON registrations(state);
 CREATE INDEX IF NOT EXISTS idx_registrations_created_at ON registrations(created_at);
+
+COMMIT;

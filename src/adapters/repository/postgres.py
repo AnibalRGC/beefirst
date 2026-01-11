@@ -47,6 +47,6 @@ def run_migrations(pool: ConnectionPool) -> None:
 
         with pool.connection() as conn:
             conn.execute(sql_content)
-            conn.commit()
+            # No explicit commit needed - migrations contain BEGIN...COMMIT
 
         logger.info(f"Migration complete: {sql_file.name}")

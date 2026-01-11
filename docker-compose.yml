@@ -24,6 +24,8 @@ services:
       - "8000:8000"
     environment:
       DATABASE_URL: postgresql://beefirst:beefirst@db:5432/beefirst
+      POOL_MIN_SIZE: "2"
+      POOL_MAX_SIZE: "10"
       TTL_SECONDS: "60"
       BCRYPT_COST: "10"
       MAX_ATTEMPTS: "3"

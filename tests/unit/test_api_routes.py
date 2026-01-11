@@ -1,5 +1,5 @@
 """
-Integration tests for API v1 routes.
+Unit tests for API v1 routes.
 
 Tests endpoint responses without requiring database connection.
 """
