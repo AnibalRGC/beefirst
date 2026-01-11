@@ -367,6 +367,11 @@ So that I can begin the registration flow via Swagger UI.
 
 **User Outcome:** Evaluator can activate account via `POST /v1/activate` with BASIC AUTH, completing the Trust Loop.
 
+**Epic Status:** ✅ COMPLETE
+- All 4 stories complete
+- 56+ tests passing (unit, integration, E2E, adversarial)
+- Production-ready implementation
+
 ### Story 3.1: Domain State Machine & Verification Logic
 
 As a Technical Evaluator,
@@ -382,6 +387,11 @@ So that I can verify the state machine invariants are protected in pure domain c
 **And** verification checks: code match (FR8), password match (FR9), within 60s (FR10), attempts < 3 (FR11)
 **And** successful verification transitions CLAIMED → ACTIVE (FR12)
 **And** state transitions are forward-only (FR14) - no ACTIVE → CLAIMED allowed
+
+**Status:** ✅ COMPLETE
+- Implementation: `src/domain/registration.py:77-97`, `src/domain/ports.py:12-48`
+- Tests: `tests/unit/test_registration_service.py::TestVerifyAndActivate` (8 tests)
+- All acceptance criteria verified
 
 ---
 
@@ -400,6 +410,12 @@ So that I can verify concurrent activation attempts don't cause inconsistencies.
 **And** password verification uses bcrypt's built-in constant-time comparison
 **And** returns `VerifyResult` enum: SUCCESS, INVALID_CODE, EXPIRED, LOCKED, NOT_FOUND
 **And** on SUCCESS: state updated to ACTIVE, activated_at timestamp set
+
+**Status:** ✅ COMPLETE
+- Implementation: `src/adapters/repository/postgres.py:94-228`
+- Tests: `tests/integration/test_postgres_repository.py` (15 tests for verify_and_activate)
+- Security: Timing oracle prevention with dummy hash, constant-time operations
+- All acceptance criteria verified
 
 ---
 
@@ -424,6 +440,12 @@ So that I can complete the Trust Loop and activate my account.
 **And** the error message is identical regardless of failure reason (NFR-P3)
 **And** response timing is consistent regardless of failure mode (NFR-P2)
 
+**Status:** ✅ COMPLETE
+- Implementation: `src/api/v1/routes.py:63-98`, `src/api/dependencies.py:55-75`
+- Tests: `tests/unit/test_api_routes.py::TestActivateEndpoint` (18 tests)
+- E2E Tests: `tests/integration/test_register_flow.py::TestActivationFlow` (6 tests)
+- All acceptance criteria verified
+
 ---
 
 ### Story 3.4: Timing-Safe Error Responses
@@ -440,6 +462,12 @@ So that I can verify the system is resistant to timing oracle attacks.
 **And** bcrypt verification runs even for non-existent emails (dummy hash comparison)
 **And** `secrets.compare_digest()` is used for all string comparisons
 **And** no early returns that could leak information via timing
+
+**Status:** ✅ COMPLETE
+- Implementation: `src/adapters/repository/postgres.py:45-48,149-169` (timing oracle prevention)
+- Tests: `tests/adversarial/test_timing_attacks.py` (7 comprehensive tests)
+- Statistical validation: 20 iterations, 20% variance threshold
+- All acceptance criteria verified
 
 ---
 

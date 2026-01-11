@@ -6,6 +6,8 @@ Requires PostgreSQL to be running (via docker-compose).
 """
 
 import logging
+import re
+from base64 import b64encode
 
 import pytest
 from fastapi.testclient import TestClient
@@ -43,6 +45,13 @@ def client(pool: ConnectionPool) -> TestClient:
     # Override the app's pool with our test pool
     app.state.pool = pool
     return TestClient(app)
+
+
+def basic_auth_header(email: str, password: str) -> dict:
+    """Create HTTP BASIC AUTH header for testing."""
+    credentials = f"{email}:{password}"
+    encoded = b64encode(credentials.encode()).decode()
+    return {"Authorization": f"Basic {encoded}"}
 
 
 class TestRegisterFlow:
@@ -173,6 +182,242 @@ class TestRegisterFlow:
                 json={"email": email, "password": "secure123"},
             )
             assert response.status_code == 201
+
+
+class TestActivationFlow:
+    """Integration tests for the complete Trust Loop: register → activate."""
+
+    def test_full_registration_and_activation_flow(
+        self,
+        client: TestClient,
+        caplog: pytest.LogCaptureFixture,
+        pool: ConnectionPool,
+    ) -> None:
+        """
+        End-to-end: register → extract code → activate → verify ACTIVE.
+
+        This test verifies the complete Trust Loop:
+        1. User registers with email and password
+        2. System generates and logs verification code
+        3. User activates account with code via BASIC AUTH
+        4. System transitions state from CLAIMED to ACTIVE
+        """
+        email = "e2e@example.com"
+        password = "secure123"
+
+        # Step 1: Register user
+        with caplog.at_level(logging.INFO):
+            register_response = client.post(
+                "/v1/register",
+                json={"email": email, "password": password},
+            )
+
+        assert register_response.status_code == 201
+        assert register_response.json()["email"] == email
+
+        # Step 2: Extract verification code from logs
+        # Log format: [VERIFICATION] Email: e2e@example.com Code: 1234
+        log_text = caplog.text
+        match = re.search(r"Code: (\d{4})", log_text)
+        assert match is not None, "Verification code not found in logs"
+        verification_code = match.group(1)
+
+        # Verify state is CLAIMED before activation
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT state, activated_at FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+        assert row is not None
+        assert row[0] == "CLAIMED"
+        assert row[1] is None  # activated_at not set yet
+
+        # Step 3: Activate account with BASIC AUTH
+        activate_response = client.post(
+            "/v1/activate",
+            json={"code": verification_code},
+            headers=basic_auth_header(email, password),
+        )
+
+        assert activate_response.status_code == 200
+        assert activate_response.json() == {
+            "message": "Account activated",
+            "email": email,
+        }
+
+        # Step 4: Verify state is ACTIVE and activated_at is set
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT state, activated_at FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+
+        assert row is not None
+        assert row[0] == "ACTIVE"
+        assert row[1] is not None  # activated_at should now be set
+
+    def test_activation_with_wrong_code_fails(
+        self,
+        client: TestClient,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Activation with wrong verification code returns 401."""
+        email = "wrongcode@example.com"
+        password = "secure123"
+
+        # Register user
+        with caplog.at_level(logging.INFO):
+            client.post(
+                "/v1/register",
+                json={"email": email, "password": password},
+            )
+
+        # Try to activate with wrong code
+        activate_response = client.post(
+            "/v1/activate",
+            json={"code": "9999"},  # Wrong code
+            headers=basic_auth_header(email, password),
+        )
+
+        assert activate_response.status_code == 401
+        assert activate_response.json() == {"detail": "Invalid credentials or code"}
+
+    def test_activation_with_wrong_password_fails(
+        self,
+        client: TestClient,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Activation with wrong password returns 401."""
+        email = "wrongpwd@example.com"
+        password = "secure123"
+
+        # Register user and extract code
+        with caplog.at_level(logging.INFO):
+            client.post(
+                "/v1/register",
+                json={"email": email, "password": password},
+            )
+
+        log_text = caplog.text
+        match = re.search(r"Code: (\d{4})", log_text)
+        assert match is not None
+        verification_code = match.group(1)
+
+        # Try to activate with wrong password
+        activate_response = client.post(
+            "/v1/activate",
+            json={"code": verification_code},
+            headers=basic_auth_header(email, "wrongpassword"),
+        )
+
+        assert activate_response.status_code == 401
+        assert activate_response.json() == {"detail": "Invalid credentials or code"}
+
+    def test_activation_with_normalized_email(
+        self,
+        client: TestClient,
+        caplog: pytest.LogCaptureFixture,
+        pool: ConnectionPool,
+    ) -> None:
+        """Activation works with denormalized email (case-insensitive)."""
+        email = "normalize@example.com"
+        password = "secure123"
+
+        # Register with normalized email
+        with caplog.at_level(logging.INFO):
+            client.post(
+                "/v1/register",
+                json={"email": email, "password": password},
+            )
+
+        log_text = caplog.text
+        match = re.search(r"Code: (\d{4})", log_text)
+        assert match is not None
+        verification_code = match.group(1)
+
+        # Activate with denormalized email (uppercase, spaces)
+        activate_response = client.post(
+            "/v1/activate",
+            json={"code": verification_code},
+            headers=basic_auth_header("  NORMALIZE@EXAMPLE.COM  ", password),
+        )
+
+        assert activate_response.status_code == 200
+
+        # Verify state is ACTIVE
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT state FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+
+        assert row is not None
+        assert row[0] == "ACTIVE"
+
+    def test_activation_without_registration_fails(self, client: TestClient) -> None:
+        """Activation without prior registration returns 401."""
+        activate_response = client.post(
+            "/v1/activate",
+            json={"code": "1234"},
+            headers=basic_auth_header("nonexistent@example.com", "password"),
+        )
+
+        assert activate_response.status_code == 401
+        assert activate_response.json() == {"detail": "Invalid credentials or code"}
+
+    def test_activation_after_3_failed_attempts_locks_account(
+        self,
+        client: TestClient,
+        caplog: pytest.LogCaptureFixture,
+        pool: ConnectionPool,
+    ) -> None:
+        """Account locks after 3 failed activation attempts."""
+        email = "lockout@example.com"
+        password = "secure123"
+
+        # Register user and extract code
+        with caplog.at_level(logging.INFO):
+            client.post(
+                "/v1/register",
+                json={"email": email, "password": password},
+            )
+
+        log_text = caplog.text
+        match = re.search(r"Code: (\d{4})", log_text)
+        assert match is not None
+        correct_code = match.group(1)
+
+        # Make 3 failed attempts
+        for _ in range(3):
+            response = client.post(
+                "/v1/activate",
+                json={"code": "0000"},  # Wrong code
+                headers=basic_auth_header(email, password),
+            )
+            assert response.status_code == 401
+
+        # Verify account is LOCKED
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT state, attempt_count FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+
+        assert row is not None
+        assert row[0] == "LOCKED"
+        assert row[1] == 3
+
+        # Even correct code should now fail
+        response = client.post(
+            "/v1/activate",
+            json={"code": correct_code},
+            headers=basic_auth_header(email, password),
+        )
+        assert response.status_code == 401
 
 
 class TestRegisterValidation:
