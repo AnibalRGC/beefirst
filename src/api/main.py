@@ -28,7 +28,7 @@ tags_metadata = [
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # pragma: no cover
     """
     FastAPI lifespan context manager.
 
@@ -36,6 +36,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     - Creates database connection pool on startup
     - Runs migrations on startup
     - Closes connection pool on shutdown
+
+    Note: Excluded from coverage as this runs at server startup,
+    not during test execution. Integration tests use their own pool.
     """
     settings = get_settings()
 

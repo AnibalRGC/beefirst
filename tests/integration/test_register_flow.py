@@ -764,3 +764,66 @@ class TestReRegistrationFlow:
         assert response2.status_code == 409, (
             "Re-registration should fail for CLAIMED email (let it expire naturally)"
         )
+
+
+class TestHealthCheck:
+    """Integration tests for the health check endpoint."""
+
+    def test_health_check_returns_healthy(self, client: TestClient) -> None:
+        """Health check endpoint returns healthy status."""
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert response.json() == {"status": "healthy"}
+
+    def test_health_check_validates_database(
+        self, client: TestClient, pool: ConnectionPool
+    ) -> None:
+        """Health check validates database connectivity."""
+        # First verify database is working
+        with pool.connection() as conn:
+            conn.execute("SELECT 1")
+
+        # Health check should succeed
+        response = client.get("/health")
+        assert response.status_code == 200
+
+
+class TestAlreadyLockedAccount:
+    """Tests for edge case where account is already locked in database."""
+
+    def test_already_locked_account_returns_locked(
+        self,
+        client: TestClient,
+        pool: ConnectionPool,
+    ) -> None:
+        """Account that is already LOCKED (attempt_count >= 3) returns LOCKED.
+
+        This tests the edge case where the account was locked by a previous
+        request and the current request sees it as already locked.
+        """
+        email = "prelocked@example.com"
+        password = "secure123"
+
+        # Directly insert a LOCKED account with attempt_count = 3
+        # This simulates the edge case where account is already locked
+        import bcrypt
+
+        password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(10)).decode()
+        with pool.connection() as conn:
+            # Insert with CLAIMED state but attempt_count = 3
+            # This tests the "already locked" branch in verify_and_activate
+            conn.execute(
+                """INSERT INTO registrations
+                   (email, password_hash, verification_code, state, attempt_count)
+                   VALUES (%s, %s, %s, 'CLAIMED', 3)""",
+                (email, password_hash, "1234"),
+            )
+            conn.commit()
+
+        # Try to activate - should return LOCKED because attempt_count >= 3
+        response = client.post(
+            "/v1/activate",
+            json={"code": "1234"},
+            headers=basic_auth_header(email, password),
+        )
+        assert response.status_code == 401

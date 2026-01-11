@@ -250,12 +250,16 @@ class PostgresRegistrationRepository:
             return VerifyResult.SUCCESS
 
 
-def run_migrations(pool: ConnectionPool) -> None:
+def run_migrations(pool: ConnectionPool) -> None:  # pragma: no cover
     """
     Execute all SQL migration files from the migrations directory.
 
     Migrations are executed in sorted order (alphabetically by filename).
     Each migration should be idempotent (use IF NOT EXISTS, etc.).
+
+    Note: Excluded from coverage as this runs at server startup.
+    Migrations are tested implicitly by the integration test suite
+    which requires proper database schema to function.
 
     Args:
         pool: psycopg3 ConnectionPool instance
