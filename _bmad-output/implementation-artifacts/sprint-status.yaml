@@ -69,7 +69,7 @@ development_status:
   4-1-registration-expiration-60-second-timeout: review
   4-2-account-lockout-3-failed-attempts: review
   4-3-credential-purge-data-stewardship: review
-  4-4-email-release-re-registration: backlog
+  4-4-email-release-re-registration: review
   epic-4-retrospective: optional
 
   # Epic 5: Test Suite & Quality Assurance

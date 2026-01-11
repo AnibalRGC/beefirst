@@ -1106,3 +1106,273 @@ class TestDataStewardship:
         # If state is EXPIRED, password_hash MUST be NULL (atomic)
         assert row[0] == "EXPIRED", "State should be EXPIRED"
         assert row[1] is None, "If state=EXPIRED, password_hash must be NULL (atomic purge)"
+
+
+class TestEmailRelease:
+    """Email release and re-registration tests - FR17, FR26.
+
+    These tests verify that emails in EXPIRED or LOCKED states can be
+    re-registered, while ACTIVE and CLAIMED states cannot.
+
+    - FR17: Release emails from EXPIRED/LOCKED states for re-registration
+    - FR26: Timestamp state transitions using database time
+    - FR18: Prevent race conditions (atomic SQL operations)
+    """
+
+    def test_claim_email_succeeds_for_expired_email(
+        self, repository: PostgresRegistrationRepository, pool: ConnectionPool
+    ) -> None:
+        """Re-registration succeeds for EXPIRED emails (FR17).
+
+        AC1: Re-registration succeeds for EXPIRED emails with fresh data.
+        """
+        email = "reregister_expired@example.com"
+
+        # Create EXPIRED registration (with NULL password_hash per Data Stewardship)
+        with pool.connection() as conn:
+            conn.execute(
+                """INSERT INTO registrations (email, password_hash, verification_code, state)
+                   VALUES (%s, NULL, '0000', 'EXPIRED')""",
+                (email,),
+            )
+            conn.commit()
+
+        # Re-register
+        result = repository.claim_email(email, "$2b$10$newhash", "9999")
+        assert result is True, "Re-registration should succeed for EXPIRED email"
+
+        # Verify record was reset
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT state, verification_code, attempt_count, password_hash FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+
+        assert row[0] == "CLAIMED", "State should reset to CLAIMED"
+        assert row[1] == "9999", "New verification code should be stored"
+        assert row[2] == 0, "Attempt count should reset to 0"
+        assert row[3] is not None, "New password hash should be stored"
+
+    def test_claim_email_succeeds_for_locked_email(
+        self, repository: PostgresRegistrationRepository, pool: ConnectionPool
+    ) -> None:
+        """Re-registration succeeds for LOCKED emails (FR17).
+
+        AC2: Re-registration succeeds for LOCKED emails with fresh data.
+        """
+        email = "reregister_locked@example.com"
+
+        # Create LOCKED registration (with NULL password_hash per Data Stewardship)
+        with pool.connection() as conn:
+            conn.execute(
+                """INSERT INTO registrations (email, password_hash, verification_code, state, attempt_count)
+                   VALUES (%s, NULL, '0000', 'LOCKED', 3)""",
+                (email,),
+            )
+            conn.commit()
+
+        # Re-register
+        result = repository.claim_email(email, "$2b$10$newhash", "8888")
+        assert result is True, "Re-registration should succeed for LOCKED email"
+
+        # Verify record was reset
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT state, verification_code, attempt_count, password_hash FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+
+        assert row[0] == "CLAIMED", "State should reset to CLAIMED"
+        assert row[1] == "8888", "New verification code should be stored"
+        assert row[2] == 0, "Attempt count should reset to 0"
+        assert row[3] is not None, "New password hash should be stored"
+
+    def test_claim_email_fails_for_active_email(
+        self, repository: PostgresRegistrationRepository, pool: ConnectionPool
+    ) -> None:
+        """Re-registration fails for ACTIVE emails.
+
+        AC3: ACTIVE accounts cannot be re-registered.
+        """
+        email = "active_email@example.com"
+
+        # Create ACTIVE registration
+        with pool.connection() as conn:
+            conn.execute(
+                """INSERT INTO registrations (email, password_hash, verification_code, state, activated_at)
+                   VALUES (%s, '$2b$10$activehash', '1234', 'ACTIVE', NOW())""",
+                (email,),
+            )
+            conn.commit()
+
+        # Attempt re-registration
+        result = repository.claim_email(email, "$2b$10$newhash", "5678")
+        assert result is False, "Re-registration should fail for ACTIVE email"
+
+        # Verify ACTIVE record was NOT modified
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT state, verification_code, password_hash FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+
+        assert row[0] == "ACTIVE", "State should remain ACTIVE"
+        assert row[1] == "1234", "Original verification code should remain"
+        assert row[2] == "$2b$10$activehash", "Original password hash should remain"
+
+    def test_claim_email_fails_for_claimed_email(
+        self, repository: PostgresRegistrationRepository, pool: ConnectionPool
+    ) -> None:
+        """Re-registration fails for CLAIMED emails (in-progress registration).
+
+        AC4: CLAIMED emails cannot be re-registered - let them expire naturally.
+        """
+        email = "claimed_email@example.com"
+
+        # Create CLAIMED registration (in-progress)
+        with pool.connection() as conn:
+            conn.execute(
+                """INSERT INTO registrations (email, password_hash, verification_code, state)
+                   VALUES (%s, '$2b$10$claimedhash', '1234', 'CLAIMED')""",
+                (email,),
+            )
+            conn.commit()
+
+        # Attempt re-registration
+        result = repository.claim_email(email, "$2b$10$newhash", "5678")
+        assert result is False, "Re-registration should fail for CLAIMED email"
+
+        # Verify CLAIMED record was NOT modified
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT state, verification_code, password_hash FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+
+        assert row[0] == "CLAIMED", "State should remain CLAIMED"
+        assert row[1] == "1234", "Original verification code should remain"
+        assert row[2] == "$2b$10$claimedhash", "Original password hash should remain"
+
+    def test_created_at_updated_on_reregistration(
+        self, repository: PostgresRegistrationRepository, pool: ConnectionPool
+    ) -> None:
+        """Re-registration updates created_at to new timestamp (FR26).
+
+        AC1: New `created_at` timestamp is set using database time.
+        """
+        email = "timestamp_reregister@example.com"
+
+        # Create EXPIRED registration with old timestamp
+        with pool.connection() as conn:
+            conn.execute(
+                """INSERT INTO registrations (email, password_hash, verification_code, state, created_at)
+                   VALUES (%s, NULL, '0000', 'EXPIRED', NOW() - INTERVAL '1 hour')""",
+                (email,),
+            )
+            conn.commit()
+
+        # Get original timestamp
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT created_at FROM registrations WHERE email = %s",
+                (email,),
+            )
+            original_created_at = cursor.fetchone()[0]
+
+        # Re-register
+        result = repository.claim_email(email, "$2b$10$newhash", "9999")
+        assert result is True
+
+        # Verify created_at was updated
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT created_at FROM registrations WHERE email = %s",
+                (email,),
+            )
+            new_created_at = cursor.fetchone()[0]
+
+        assert new_created_at > original_created_at, (
+            "created_at should be updated to new timestamp (FR26)"
+        )
+
+    def test_activated_at_cleared_on_reregistration(
+        self, repository: PostgresRegistrationRepository, pool: ConnectionPool
+    ) -> None:
+        """Re-registration clears activated_at timestamp.
+
+        The re-registered account has not been activated yet.
+        """
+        email = "clear_activated@example.com"
+
+        # Create EXPIRED registration (simulate account that was once active then expired)
+        # Note: In practice, ACTIVE doesn't transition to EXPIRED, but test the field reset
+        with pool.connection() as conn:
+            conn.execute(
+                """INSERT INTO registrations (email, password_hash, verification_code, state, activated_at)
+                   VALUES (%s, NULL, '0000', 'EXPIRED', NOW() - INTERVAL '1 hour')""",
+                (email,),
+            )
+            conn.commit()
+
+        # Re-register
+        result = repository.claim_email(email, "$2b$10$newhash", "9999")
+        assert result is True
+
+        # Verify activated_at was cleared
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT activated_at FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+
+        assert row[0] is None, "activated_at should be NULL after re-registration"
+
+    def test_concurrent_reregistration_exactly_one_succeeds(self, pool: ConnectionPool) -> None:
+        """Concurrent re-registration attempts - exactly one succeeds (FR18).
+
+        AC5: Multiple concurrent re-registration attempts for the same EXPIRED email
+        result in exactly one success, with no data corruption.
+        """
+        email = "concurrent_reregister@example.com"
+
+        # Create EXPIRED registration
+        with pool.connection() as conn:
+            conn.execute(
+                """INSERT INTO registrations (email, password_hash, verification_code, state)
+                   VALUES (%s, NULL, '0000', 'EXPIRED')""",
+                (email,),
+            )
+            conn.commit()
+
+        results: list[bool] = []
+
+        def attempt_reregister(code: str) -> None:
+            repo = PostgresRegistrationRepository(pool)
+            result = repo.claim_email(email, f"$2b$10$hash{code}", code)
+            results.append(result)
+
+        # Run 5 concurrent re-registration attempts
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(attempt_reregister, str(i).zfill(4)) for i in range(5)]
+            for f in futures:
+                f.result()
+
+        # Exactly one should succeed (first UPDATE wins, others see CLAIMED state)
+        assert results.count(True) == 1, "Exactly one re-registration should succeed"
+        assert results.count(False) == 4, "Other attempts should fail"
+
+        # Verify no data corruption - record should be in consistent state
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT state, attempt_count FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+
+        assert row[0] == "CLAIMED", "Final state should be CLAIMED"
+        assert row[1] == 0, "Attempt count should be 0"

@@ -454,3 +454,302 @@ class TestRegisterValidation:
             json={"email": "valid@example.com"},
         )
         assert response.status_code == 422
+
+
+class TestReRegistrationFlow:
+    """E2E tests for email release and re-registration - FR17, FR26.
+
+    These tests verify the full re-registration flow through the API:
+    - EXPIRED emails can be re-registered
+    - LOCKED emails can be re-registered
+    - New verification codes work, old codes don't
+    """
+
+    def test_full_reregistration_flow_after_expiration(
+        self,
+        client: TestClient,
+        caplog: pytest.LogCaptureFixture,
+        pool: ConnectionPool,
+    ) -> None:
+        """Complete re-registration flow after expiration (AC6).
+
+        1. Register with email and password
+        2. Let registration expire (manipulate DB)
+        3. Re-register with same email and new password
+        4. Verify new code works and old code doesn't
+        """
+        email = "reregister@example.com"
+        first_password = "firstpassword123"
+        second_password = "secondpassword456"
+
+        # Step 1: First registration
+        with caplog.at_level(logging.INFO):
+            response1 = client.post(
+                "/v1/register",
+                json={"email": email, "password": first_password},
+            )
+        assert response1.status_code == 201
+
+        # Extract first verification code
+        match = re.search(r"Code: (\d{4})", caplog.text)
+        assert match is not None
+        first_code = match.group(1)
+
+        # Step 2: Expire the registration (simulate by setting state to EXPIRED)
+        with pool.connection() as conn:
+            conn.execute(
+                "UPDATE registrations SET state = 'EXPIRED', password_hash = NULL WHERE email = %s",
+                (email,),
+            )
+            conn.commit()
+
+        # Step 3: Re-register with new password
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            response2 = client.post(
+                "/v1/register",
+                json={"email": email, "password": second_password},
+            )
+        assert response2.status_code == 201, "Re-registration should succeed for EXPIRED email"
+
+        # Extract second verification code
+        match = re.search(r"Code: (\d{4})", caplog.text)
+        assert match is not None
+        second_code = match.group(1)
+
+        # Verify codes are different (very high probability)
+        # Note: There's a 1/10000 chance they could be the same
+        # This is acceptable for testing purposes
+
+        # Step 4: Verify OLD code fails (AC7)
+        response_old = client.post(
+            "/v1/activate",
+            json={"code": first_code},
+            headers=basic_auth_header(email, second_password),
+        )
+        assert response_old.status_code == 401, "Old code should fail after re-registration"
+
+        # Step 5: Verify NEW code succeeds
+        response_new = client.post(
+            "/v1/activate",
+            json={"code": second_code},
+            headers=basic_auth_header(email, second_password),
+        )
+        assert response_new.status_code == 200, "New code should succeed"
+
+        # Verify final state
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT state FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+
+        assert row is not None
+        assert row[0] == "ACTIVE"
+
+    def test_reregistration_after_lockout(
+        self,
+        client: TestClient,
+        caplog: pytest.LogCaptureFixture,
+        pool: ConnectionPool,
+    ) -> None:
+        """Re-registration succeeds after account lockout (FR17).
+
+        1. Register with email
+        2. Lock account via 3 failed attempts
+        3. Re-register with same email
+        4. Verify new registration works
+        """
+        email = "lockedreregister@example.com"
+        password = "secure123"
+
+        # Step 1: Register
+        with caplog.at_level(logging.INFO):
+            response1 = client.post(
+                "/v1/register",
+                json={"email": email, "password": password},
+            )
+        assert response1.status_code == 201
+
+        # Step 2: Lock account via 3 failed attempts
+        for _ in range(3):
+            client.post(
+                "/v1/activate",
+                json={"code": "0000"},  # Wrong code
+                headers=basic_auth_header(email, password),
+            )
+
+        # Verify account is LOCKED
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT state FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+        assert row[0] == "LOCKED"
+
+        # Step 3: Re-register
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            response2 = client.post(
+                "/v1/register",
+                json={"email": email, "password": password},
+            )
+        assert response2.status_code == 201, "Re-registration should succeed for LOCKED email"
+
+        # Extract new verification code
+        match = re.search(r"Code: (\d{4})", caplog.text)
+        assert match is not None
+        new_code = match.group(1)
+
+        # Step 4: Verify new registration can be activated
+        response_activate = client.post(
+            "/v1/activate",
+            json={"code": new_code},
+            headers=basic_auth_header(email, password),
+        )
+        assert response_activate.status_code == 200
+
+        # Verify final state
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT state FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+
+        assert row is not None
+        assert row[0] == "ACTIVE"
+
+    def test_old_code_fails_after_reregistration(
+        self,
+        client: TestClient,
+        caplog: pytest.LogCaptureFixture,
+        pool: ConnectionPool,
+    ) -> None:
+        """Old verification code is rejected after re-registration (AC7).
+
+        Explicitly tests that the OLD code from before expiration
+        cannot be used after re-registration.
+        """
+        email = "oldcode@example.com"
+        password = "secure123"
+
+        # Step 1: First registration
+        with caplog.at_level(logging.INFO):
+            response1 = client.post(
+                "/v1/register",
+                json={"email": email, "password": password},
+            )
+        assert response1.status_code == 201
+
+        # Extract first code
+        match = re.search(r"Code: (\d{4})", caplog.text)
+        assert match is not None
+        first_code = match.group(1)
+
+        # Step 2: Expire the registration
+        with pool.connection() as conn:
+            conn.execute(
+                "UPDATE registrations SET state = 'EXPIRED', password_hash = NULL WHERE email = %s",
+                (email,),
+            )
+            conn.commit()
+
+        # Step 3: Re-register
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            response2 = client.post(
+                "/v1/register",
+                json={"email": email, "password": password},
+            )
+        assert response2.status_code == 201
+
+        # Verify new code was generated (don't need to capture it for this test)
+        match = re.search(r"Code: (\d{4})", caplog.text)
+        assert match is not None, "New verification code should be generated"
+
+        # Step 4: Try OLD code - must fail
+        response_old = client.post(
+            "/v1/activate",
+            json={"code": first_code},
+            headers=basic_auth_header(email, password),
+        )
+        assert response_old.status_code == 401, (
+            "Old verification code must fail after re-registration (AC7)"
+        )
+
+    def test_reregistration_fails_for_active_account(
+        self,
+        client: TestClient,
+        caplog: pytest.LogCaptureFixture,
+        pool: ConnectionPool,
+    ) -> None:
+        """Re-registration fails for already ACTIVE accounts.
+
+        Users cannot re-register with an email that has been successfully activated.
+        """
+        email = "activeaccount@example.com"
+        password = "secure123"
+
+        # Step 1: Register and activate
+        with caplog.at_level(logging.INFO):
+            response1 = client.post(
+                "/v1/register",
+                json={"email": email, "password": password},
+            )
+        assert response1.status_code == 201
+
+        match = re.search(r"Code: (\d{4})", caplog.text)
+        assert match is not None
+        code = match.group(1)
+
+        response_activate = client.post(
+            "/v1/activate",
+            json={"code": code},
+            headers=basic_auth_header(email, password),
+        )
+        assert response_activate.status_code == 200
+
+        # Verify ACTIVE state
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT state FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+        assert row[0] == "ACTIVE"
+
+        # Step 2: Attempt re-registration - should fail
+        response2 = client.post(
+            "/v1/register",
+            json={"email": email, "password": "newpassword123"},
+        )
+        assert response2.status_code == 409, "Re-registration should fail for ACTIVE email"
+
+    def test_reregistration_fails_for_inprogress_registration(
+        self,
+        client: TestClient,
+    ) -> None:
+        """Re-registration fails for in-progress (CLAIMED) registrations.
+
+        If a registration is already in progress, the second attempt should fail.
+        """
+        email = "inprogress@example.com"
+
+        # First registration
+        response1 = client.post(
+            "/v1/register",
+            json={"email": email, "password": "firstpassword123"},
+        )
+        assert response1.status_code == 201
+
+        # Second registration attempt while first is still in progress
+        response2 = client.post(
+            "/v1/register",
+            json={"email": email, "password": "secondpassword123"},
+        )
+        assert response2.status_code == 409, (
+            "Re-registration should fail for CLAIMED email (let it expire naturally)"
+        )

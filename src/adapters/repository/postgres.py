@@ -69,8 +69,12 @@ class PostgresRegistrationRepository:
         """
         Atomically claim an email address for registration.
 
-        Uses INSERT ... ON CONFLICT DO NOTHING for atomic claim.
-        The database UNIQUE constraint on email ensures no race conditions.
+        Supports re-registration for EXPIRED and LOCKED emails (FR17).
+        ACTIVE and CLAIMED emails cannot be re-registered.
+
+        Uses INSERT ... ON CONFLICT DO UPDATE WHERE for atomic upsert.
+        The WHERE clause ensures only EXPIRED/LOCKED states are overwritten.
+        The database UNIQUE constraint on email ensures no race conditions (FR18).
 
         Args:
             email: Normalized email address (lowercase, stripped)
@@ -78,12 +82,20 @@ class PostgresRegistrationRepository:
             code: 4-digit verification code
 
         Returns:
-            True if claim successful, False if email already claimed
+            True if claim successful (new registration or re-registration),
+            False if email already claimed (ACTIVE or CLAIMED state)
         """
         sql = """
-            INSERT INTO registrations (email, password_hash, verification_code)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (email) DO NOTHING
+            INSERT INTO registrations (email, password_hash, verification_code, state, attempt_count, created_at)
+            VALUES (%s, %s, %s, 'CLAIMED', 0, NOW())
+            ON CONFLICT (email) DO UPDATE
+            SET password_hash = EXCLUDED.password_hash,
+                verification_code = EXCLUDED.verification_code,
+                state = 'CLAIMED',
+                attempt_count = 0,
+                created_at = NOW(),
+                activated_at = NULL
+            WHERE registrations.state IN ('EXPIRED', 'LOCKED')
         """
 
         with self._pool.connection() as conn, conn.cursor() as cursor:
