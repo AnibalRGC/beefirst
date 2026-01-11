@@ -352,11 +352,17 @@ curl -X POST http://localhost:8000/v1/activate \
   -d '{"code": "XXXX"}'
 # Expected: {"message":"Account activated","email":"tester@example.com"}
 
-# 6. Run the full test suite
+# 6. Try to register same email again (should fail)
+curl -X POST http://localhost:8000/v1/register \
+  -H "Content-Type: application/json" \
+  -d '{"email": "tester@example.com", "password": "different456"}'
+# Expected: 409 Conflict - {"detail":"Registration failed"}
+
+# 7. Run the full test suite
 docker-compose --profile test run --rm test
 # Expected: 211 passed, 100% coverage
 
-# 7. Cleanup
+# 8. Cleanup
 docker-compose down
 ```
 
@@ -368,6 +374,7 @@ docker-compose down
 | Registration | 201 Created with expiration time |
 | Code in logs | 4-digit code visible |
 | Activation | 200 OK with email confirmation |
+| Duplicate email | 409 Conflict refused |
 | Test suite | 211 passed, 100% coverage |
 
 ---
