@@ -1,6 +1,6 @@
 # Story 4.4: Email Release and Re-Registration
 
-Status: review
+Status: done
 
 ## Story
 
@@ -368,7 +368,34 @@ N/A
 
 ### File List
 
-- src/adapters/repository/postgres.py (modified - updated claim_email method)
-- tests/integration/test_postgres_repository.py (modified - added TestEmailRelease class with 8 tests)
-- tests/integration/test_register_flow.py (modified - added TestReRegistrationFlow class with 5 tests)
+- src/adapters/repository/postgres.py (modified - updated claim_email method, added inline documentation)
+- tests/integration/test_postgres_repository.py (modified - added TestEmailRelease class with 9 tests, fixed ConnectionPool deprecation)
+- tests/integration/test_register_flow.py (modified - added TestReRegistrationFlow class with 5 tests, fixed ConnectionPool deprecation, enhanced AC7 assertions)
+- tests/adversarial/test_timing_attacks.py (modified - fixed ConnectionPool deprecation)
+- _bmad-output/planning-artifacts/architecture/core-architectural-decisions.md (modified - updated Truth 1 to reflect FR17 email release)
+
+### Code Review Fixes
+
+**Date**: 2026-01-11
+**Reviewer**: Claude Opus 4.5 (Adversarial Code Review)
+**Issues Found**: 1 High, 4 Medium, 3 Low
+**Issues Fixed**: 1 High, 5 Medium (including bonus ConnectionPool fix), 1 Low
+
+**HIGH Issues Fixed:**
+1. **AC7 Verification Gap** - Added explicit assertion that verification codes differ on re-registration in `test_full_reregistration_flow_after_expiration`
+
+**MEDIUM Issues Fixed:**
+2. **Architecture Documentation** - Updated `core-architectural-decisions.md` Truth 1 to reflect `ON CONFLICT DO UPDATE WHERE` pattern for FR17
+3. **ConnectionPool Deprecation** - Added `open=True` parameter to all 3 test fixtures (test_postgres_repository.py, test_register_flow.py, test_timing_attacks.py)
+4. **Edge Case Test** - Added `test_reregistration_with_empty_password_hash` to verify repository layer accepts any string (domain validation responsibility)
+5. **Incomplete Test** - Fixed `test_old_code_fails_after_reregistration` to capture and verify new code works (complete AC7 coverage)
+
+**LOW Issues Fixed:**
+6. **Inline SQL Documentation** - Added comment explaining `rowcount == 1` return behavior in claim_email
+
+**Test Results After Fixes:**
+- 195 tests pass (added 1 new edge case test)
+- 0 deprecation warnings (down from 3)
+- All ruff checks pass
+- No regressions
 

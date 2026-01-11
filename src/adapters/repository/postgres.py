@@ -101,6 +101,7 @@ class PostgresRegistrationRepository:
         with self._pool.connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql, (email, password_hash, code))
             conn.commit()
+            # Returns 1 if INSERT succeeded OR UPDATE WHERE matched (EXPIRED/LOCKED only)
             return cursor.rowcount == 1
 
     def verify_and_activate(self, email: str, code: str, password: str) -> VerifyResult:

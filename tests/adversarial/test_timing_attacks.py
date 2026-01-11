@@ -38,6 +38,7 @@ def pool() -> ConnectionPool:
         conninfo=settings.database_url,
         min_size=1,
         max_size=10,
+        open=True,
     )
     yield pool
     pool.close()

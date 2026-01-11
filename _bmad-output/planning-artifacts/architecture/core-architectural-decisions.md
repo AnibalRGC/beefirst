@@ -44,7 +44,7 @@ CREATE TABLE registrations (
 
 | Truth | Schema Mechanism |
 |-------|------------------|
-| **Truth 1: Unique Claim Lock** | `email UNIQUE` constraint + `ON CONFLICT DO NOTHING` |
+| **Truth 1: Unique Claim Lock** | `email UNIQUE` constraint + `ON CONFLICT DO UPDATE WHERE state IN ('EXPIRED', 'LOCKED')` for FR17 email release |
 | **Truth 3: Time-Bounded Proof** | `created_at > NOW() - INTERVAL '60 seconds'` in queries |
 | **Truth 9: Normalization** | `lower(email)` applied at query level |
 | **Truth 6: Data Stewardship** | `password_hash` NULLed on expiration/lockout |

@@ -24,6 +24,7 @@ def pool() -> ConnectionPool:
         conninfo=settings.database_url,
         min_size=1,
         max_size=10,
+        open=True,
     )
     yield pool
     pool.close()
@@ -1376,3 +1377,37 @@ class TestEmailRelease:
 
         assert row[0] == "CLAIMED", "Final state should be CLAIMED"
         assert row[1] == 0, "Attempt count should be 0"
+
+    def test_reregistration_with_empty_password_hash(
+        self, repository: PostgresRegistrationRepository, pool: ConnectionPool
+    ) -> None:
+        """Re-registration with empty password hash still succeeds (edge case).
+
+        The repository layer doesn't validate password hash format - that's
+        the domain layer's responsibility. This test verifies the repository
+        accepts any string value.
+        """
+        email = "emptyhash@example.com"
+
+        # Create EXPIRED registration
+        with pool.connection() as conn:
+            conn.execute(
+                """INSERT INTO registrations (email, password_hash, verification_code, state)
+                   VALUES (%s, NULL, '0000', 'EXPIRED')""",
+                (email,),
+            )
+            conn.commit()
+
+        # Re-register with empty password hash (domain should prevent this, but test repository)
+        result = repository.claim_email(email, "", "1234")
+        assert result is True, "Repository layer accepts empty password hash"
+
+        # Verify it was stored (even though it's invalid)
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT password_hash FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+
+        assert row[0] == "", "Empty password hash was stored (domain validation bypassed)"

@@ -25,6 +25,7 @@ def pool() -> ConnectionPool:
         conninfo=settings.database_url,
         min_size=1,
         max_size=10,
+        open=True,
     )
     yield pool
     pool.close()
@@ -517,9 +518,10 @@ class TestReRegistrationFlow:
         assert match is not None
         second_code = match.group(1)
 
-        # Verify codes are different (very high probability)
-        # Note: There's a 1/10000 chance they could be the same
-        # This is acceptable for testing purposes
+        # AC7: Verify verification codes are different
+        assert first_code != second_code, (
+            f"Verification codes must change on re-registration (AC7). Got same code: {first_code}"
+        )
 
         # Step 4: Verify OLD code fails (AC7)
         response_old = client.post(
@@ -666,11 +668,12 @@ class TestReRegistrationFlow:
             )
         assert response2.status_code == 201
 
-        # Verify new code was generated (don't need to capture it for this test)
+        # Extract second code to verify it works later
         match = re.search(r"Code: (\d{4})", caplog.text)
         assert match is not None, "New verification code should be generated"
+        second_code = match.group(1)
 
-        # Step 4: Try OLD code - must fail
+        # Step 4: Try OLD code - must fail (AC7)
         response_old = client.post(
             "/v1/activate",
             json={"code": first_code},
@@ -679,6 +682,14 @@ class TestReRegistrationFlow:
         assert response_old.status_code == 401, (
             "Old verification code must fail after re-registration (AC7)"
         )
+
+        # Step 5: Verify NEW code succeeds (complete AC7)
+        response_new = client.post(
+            "/v1/activate",
+            json={"code": second_code},
+            headers=basic_auth_header(email, password),
+        )
+        assert response_new.status_code == 200, "New verification code should succeed"
 
     def test_reregistration_fails_for_active_account(
         self,
