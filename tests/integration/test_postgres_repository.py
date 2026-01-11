@@ -530,7 +530,7 @@ class TestVerifyAndActivateExpired:
     def test_expired_registration_returns_expired(
         self, repository: PostgresRegistrationRepository, pool: ConnectionPool
     ) -> None:
-        """Registration older than 60 seconds returns EXPIRED."""
+        """Registration older than 60 seconds returns EXPIRED and transitions state."""
         email = "expired@example.com"
         password = "password123"
         code = "1234"
@@ -548,10 +548,27 @@ class TestVerifyAndActivateExpired:
         result = repository.verify_and_activate(email, code, password)
         assert result == VerifyResult.EXPIRED
 
+        # AC2: Verify database state actually transitioned to EXPIRED
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT state, password_hash FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+
+        assert row is not None
+        assert row[0] == "EXPIRED", "State should transition to EXPIRED"
+        # AC3: Verify password_hash is purged (Data Stewardship)
+        assert row[1] is None, "Password hash should be NULL after expiration"
+
     def test_registration_at_59_seconds_still_valid(
         self, repository: PostgresRegistrationRepository, pool: ConnectionPool
     ) -> None:
-        """Registration at 59 seconds is still valid (within 60 second TTL)."""
+        """Registration at 59 seconds is still valid (within 60 second TTL).
+
+        Boundary condition: TTL check uses `created_at > NOW() - INTERVAL '60 seconds'`
+        At 59 seconds, the registration is within the window and should succeed.
+        """
         email = "stillvalid@example.com"
         password = "password123"
         code = "1234"
@@ -568,3 +585,75 @@ class TestVerifyAndActivateExpired:
 
         result = repository.verify_and_activate(email, code, password)
         assert result == VerifyResult.SUCCESS
+
+    def test_password_hash_purged_on_expiration(
+        self, repository: PostgresRegistrationRepository, pool: ConnectionPool
+    ) -> None:
+        """Password hash is NULLed when registration expires (Data Stewardship).
+
+        FR24: System can purge hashed passwords when registrations expire
+        FR25: No ghost credentials for expired accounts
+        NFR-S6: Purge within 60 seconds of expiration
+        """
+        email = "purge@example.com"
+        password = "password123"
+        code = "1234"
+        password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(10)).decode()
+
+        # Create expired registration
+        with pool.connection() as conn:
+            conn.execute(
+                """INSERT INTO registrations (email, password_hash, verification_code, created_at)
+                   VALUES (%s, %s, %s, NOW() - INTERVAL '61 seconds')""",
+                (email, password_hash, code),
+            )
+            conn.commit()
+
+        # Verify password_hash is set BEFORE expiration check
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT password_hash FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+        assert row is not None
+        assert row[0] is not None, "Password hash should exist before expiration"
+
+        # Trigger expiration check
+        result = repository.verify_and_activate(email, code, password)
+        assert result == VerifyResult.EXPIRED
+
+        # Verify password_hash is NULL AFTER expiration
+        with pool.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT password_hash FROM registrations WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+        assert row is not None
+        assert row[0] is None, "Password hash should be purged after expiration"
+
+    def test_already_expired_returns_not_found(
+        self, repository: PostgresRegistrationRepository, pool: ConnectionPool
+    ) -> None:
+        """Already EXPIRED registration returns NOT_FOUND.
+
+        AC6: Consistent with other non-CLAIMED states (ACTIVE, LOCKED)
+        An EXPIRED registration should not be re-expirable.
+        """
+        email = "alreadyexpired@example.com"
+        password = "password123"
+        code = "1234"
+
+        # Insert directly with EXPIRED state (no password_hash per Data Stewardship)
+        with pool.connection() as conn:
+            conn.execute(
+                """INSERT INTO registrations
+                   (email, password_hash, verification_code, state, created_at)
+                   VALUES (%s, NULL, %s, 'EXPIRED', NOW() - INTERVAL '120 seconds')""",
+                (email, code),
+            )
+            conn.commit()
+
+        result = repository.verify_and_activate(email, code, password)
+        assert result == VerifyResult.NOT_FOUND

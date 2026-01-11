@@ -65,8 +65,8 @@ development_status:
   epic-3-retrospective: optional
 
   # Epic 4: Trust State Machine & Adversarial Handling
-  epic-4: backlog
-  4-1-registration-expiration-60-second-timeout: backlog
+  epic-4: in-progress
+  4-1-registration-expiration-60-second-timeout: review
   4-2-account-lockout-3-failed-attempts: backlog
   4-3-credential-purge-data-stewardship: backlog
   4-4-email-release-re-registration: backlog

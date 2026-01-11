@@ -191,6 +191,16 @@ class PostgresRegistrationRepository:
             """
             cursor.execute(ttl_sql, (email, TrustState.CLAIMED.value))
             if cursor.fetchone() is None:
+                # Lazy transition: CLAIMED → EXPIRED with credential purge (FR15, FR24)
+                # Data Stewardship: No ghost credentials for expired accounts (FR25)
+                expire_sql = """
+                    UPDATE registrations
+                    SET state = %s, password_hash = NULL
+                    WHERE email = %s AND state = %s
+                """
+                cursor.execute(
+                    expire_sql, (TrustState.EXPIRED.value, email, TrustState.CLAIMED.value)
+                )
                 conn.commit()
                 return VerifyResult.EXPIRED
 
