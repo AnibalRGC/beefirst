@@ -3,6 +3,32 @@ PostgreSQL repository adapter - Implements RegistrationRepository protocol.
 
 This module provides the PostgreSQL implementation of the domain's
 repository port using psycopg3 with raw SQL.
+
+Security Design - Timing Oracle Prevention:
+------------------------------------------
+The verify_and_activate method implements constant-time operations to prevent
+timing oracle attacks that could reveal information about account existence
+or credential validity:
+
+1. **bcrypt.checkpw()**: Used for password verification. bcrypt's built-in
+   comparison is constant-time (~100ms with cost factor 10), which dominates
+   response time and masks other timing variations.
+
+2. **secrets.compare_digest()**: Used for verification code comparison.
+   Explicitly mitigates timing attacks on the 4-digit code.
+
+3. **_DUMMY_BCRYPT_HASH**: When an email doesn't exist or password_hash is NULL
+   (locked accounts), we compare against a pre-computed dummy hash to ensure
+   bcrypt always runs. This prevents attackers from detecting account existence
+   through response time differences.
+
+4. **Execution Order**: Both cryptographic comparisons ALWAYS execute before
+   any state-based return. No early returns bypass the constant-time operations.
+
+References:
+- [Source: architecture.md#Authentication & Security]
+- [Source: prd.md#NFR-S2 (Constant-time password verification)]
+- [Source: prd.md#NFR-P3 (Consistent error timing)]
 """
 
 import logging
@@ -123,7 +149,9 @@ class PostgresRegistrationRepository:
             # Prepare values for constant-time comparison
             # Use dummy values if registration not found to prevent timing oracle
             if row is not None:
-                stored_hash = row[0]
+                # CRITICAL: password_hash may be NULL for LOCKED accounts (Data Stewardship)
+                # Use dummy hash to maintain constant-time comparison
+                stored_hash = row[0] if row[0] is not None else _DUMMY_BCRYPT_HASH
                 stored_code = row[1]
                 state = row[2]
                 attempt_count = row[3]
