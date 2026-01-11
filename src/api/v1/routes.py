@@ -6,7 +6,7 @@ Defines REST endpoints for the Trust State Machine Registration API.
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from src.api.dependencies import get_registration_service
+from src.api.dependencies import get_basic_auth_credentials, get_registration_service
 from src.api.models import (
     ActivateRequest,
     ActivateResponse,
@@ -15,6 +15,7 @@ from src.api.models import (
     RegisterResponse,
 )
 from src.domain.exceptions import EmailAlreadyClaimed
+from src.domain.ports import VerifyResult
 from src.domain.registration import RegistrationService
 
 router = APIRouter(tags=["v1"])
@@ -68,17 +69,30 @@ async def register(
     },
     summary="Activate account with verification code",
     description="Submit the 4-digit verification code received via email "
-    "along with credentials to activate the account.",
+    "along with credentials via HTTP BASIC AUTH to activate the account.",
 )
-async def activate(request: ActivateRequest) -> ActivateResponse:
+async def activate(
+    request_data: ActivateRequest,
+    credentials: tuple[str, str] = Depends(get_basic_auth_credentials),
+    service: RegistrationService = Depends(get_registration_service),
+) -> ActivateResponse:
     """
     Activate account with verification code.
 
     - **code**: 4-digit verification code from email
 
-    Note: Credentials are provided via HTTP BASIC AUTH header.
+    Credentials (email:password) are provided via HTTP BASIC AUTH header.
     """
+    email, password = credentials
+
+    result = service.verify_and_activate(email, request_data.code, password)
+
+    if result == VerifyResult.SUCCESS:
+        return ActivateResponse(message="Account activated", email=email)
+
+    # All failures return identical generic error (NFR-S4, NFR-P3)
+    # This prevents email enumeration, code/password differentiation, and timing attacks
     raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Activation not yet implemented",
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid credentials or code",
     )
