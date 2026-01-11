@@ -18,6 +18,7 @@ class RegisterResponse(BaseModel):
     """Response model for successful registration."""
 
     message: str
+    email: str
     expires_in_seconds: int
 
 

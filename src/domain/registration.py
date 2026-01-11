@@ -26,13 +26,16 @@ class RegistrationService:
     repository: RegistrationRepository
     email_sender: EmailSender
 
-    def register(self, email: str, password: str) -> None:
+    def register(self, email: str, password: str) -> str:
         """
         Register a new user by claiming their email address.
 
         Args:
             email: User's email address (will be normalized)
             password: User's password (will be hashed)
+
+        Returns:
+            Normalized email address
 
         Raises:
             EmailAlreadyClaimed: If email is already registered
@@ -46,6 +49,7 @@ class RegistrationService:
             raise EmailAlreadyClaimed(normalized_email)
 
         self.email_sender.send_verification_code(normalized_email, code)
+        return normalized_email
 
     def _normalize_email(self, email: str) -> str:
         """

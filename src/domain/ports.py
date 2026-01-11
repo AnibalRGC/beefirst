@@ -10,7 +10,11 @@ from typing import Protocol
 
 
 class VerifyResult(Enum):
-    """Result of verification attempt."""
+    """
+    Result of verification attempt.
+
+    Note: Used in Story 3.1 (Account Activation Flow) - not yet used in Epic 2.
+    """
 
     SUCCESS = "success"
     INVALID_CODE = "invalid_code"

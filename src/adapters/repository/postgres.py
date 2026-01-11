@@ -85,10 +85,14 @@ def run_migrations(pool: ConnectionPool) -> None:
 
     for sql_file in sql_files:
         logger.info(f"Executing migration: {sql_file.name}")
-        sql_content = sql_file.read_text()
+        try:
+            sql_content = sql_file.read_text()
 
-        with pool.connection() as conn:
-            conn.execute(sql_content)
-            # No explicit commit needed - migrations contain BEGIN...COMMIT
+            with pool.connection() as conn:
+                conn.execute(sql_content)
+                # psycopg3 auto-commits by default
 
-        logger.info(f"Migration complete: {sql_file.name}")
+            logger.info(f"Migration complete: {sql_file.name}")
+        except Exception as e:
+            logger.error(f"Migration failed: {sql_file.name} - {e}")
+            raise RuntimeError(f"Database migration failed: {sql_file.name}") from e

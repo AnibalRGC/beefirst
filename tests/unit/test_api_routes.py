@@ -40,6 +40,7 @@ class TestRegisterEndpoint:
     def test_register_success_returns_201(self, app: FastAPI) -> None:
         """Successful registration returns 201 Created."""
         mock_service = MagicMock(spec=RegistrationService)
+        mock_service.register.return_value = "user@example.com"
 
         def override_service():
             return mock_service
@@ -56,6 +57,7 @@ class TestRegisterEndpoint:
             assert response.status_code == 201
             assert response.json() == {
                 "message": "Verification code sent",
+                "email": "user@example.com",
                 "expires_in_seconds": 60,
             }
             mock_service.register.assert_called_once_with("user@example.com", "secure123")

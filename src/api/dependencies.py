@@ -6,13 +6,17 @@ domain services and infrastructure adapters into routes.
 """
 
 from fastapi import Request
+from psycopg_pool import ConnectionPool
 
 from src.adapters.repository.postgres import PostgresRegistrationRepository
 from src.adapters.smtp.console import ConsoleEmailSender
 from src.domain.registration import RegistrationService
 
+# Module-level singleton - ConsoleEmailSender is stateless
+_email_sender = ConsoleEmailSender()
 
-def get_pool(request: Request):
+
+def get_pool(request: Request) -> ConnectionPool:
     """
     Get connection pool from app state.
 
@@ -28,8 +32,8 @@ def get_repository(request: Request) -> PostgresRegistrationRepository:
 
 
 def get_email_sender() -> ConsoleEmailSender:
-    """Create console email sender."""
-    return ConsoleEmailSender()
+    """Get console email sender (singleton)."""
+    return _email_sender
 
 
 def get_registration_service(request: Request) -> RegistrationService:

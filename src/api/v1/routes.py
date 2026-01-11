@@ -46,13 +46,17 @@ async def register(
     Returns verification code expiration time on success.
     """
     try:
-        service.register(request_data.email, request_data.password)
+        normalized_email = service.register(request_data.email, request_data.password)
     except EmailAlreadyClaimed:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Registration failed",
         ) from None
-    return RegisterResponse(message="Verification code sent", expires_in_seconds=60)
+    return RegisterResponse(
+        message="Verification code sent",
+        email=normalized_email,
+        expires_in_seconds=60,
+    )
 
 
 @router.post(

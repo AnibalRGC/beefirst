@@ -64,8 +64,13 @@ class TestRegisterResponse:
 
     def test_valid_register_response(self) -> None:
         """Valid response fields are accepted."""
-        response = RegisterResponse(message="Verification code sent", expires_in_seconds=60)
+        response = RegisterResponse(
+            message="Verification code sent",
+            email="user@example.com",
+            expires_in_seconds=60
+        )
         assert response.message == "Verification code sent"
+        assert response.email == "user@example.com"
         assert response.expires_in_seconds == 60
 
 

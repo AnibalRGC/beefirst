@@ -16,6 +16,10 @@ class ConsoleEmailSender:
 
     Uses structural subtyping - no explicit inheritance from Protocol.
     For demo/development purposes - prints verification codes to stdout.
+
+    ⚠️  WARNING: DO NOT USE IN PRODUCTION ⚠️
+    This adapter logs verification codes in plaintext for demonstration.
+    Replace with a real SMTP adapter before production deployment.
     """
 
     def send_verification_code(self, email: str, code: str) -> None:

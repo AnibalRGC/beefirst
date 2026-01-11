@@ -61,6 +61,7 @@ class TestRegisterFlow:
         assert response.status_code == 201
         assert response.json() == {
             "message": "Verification code sent",
+            "email": "integration@example.com",
             "expires_in_seconds": 60,
         }
         # Verify code appears in logs
