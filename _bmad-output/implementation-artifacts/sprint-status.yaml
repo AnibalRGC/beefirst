@@ -41,11 +41,11 @@ story_location: _bmad-output/implementation-artifacts
 
 development_status:
   # Epic 1: Project Bootstrap & Infrastructure
-  epic-1: in-progress
-  1-1-project-structure-dependencies: review
-  1-2-docker-compose-database-setup: review
-  1-3-fastapi-app-openapi-docs: review
-  1-4-readme-architecture-documentation: review
+  epic-1: done
+  1-1-project-structure-dependencies: done
+  1-2-docker-compose-database-setup: done
+  1-3-fastapi-app-openapi-docs: done
+  1-4-readme-architecture-documentation: done
   epic-1-retrospective: optional
 
   # Epic 2: User Registration Flow
